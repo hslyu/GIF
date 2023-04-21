@@ -1,0 +1,13 @@
+name: PIF
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - numpy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - jupyterlab
