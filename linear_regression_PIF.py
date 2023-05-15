@@ -113,9 +113,9 @@ def __main__():
     # print(torch.linalg.eig((hessian @ hessian)[:2, :2]))
     # print(f"Actual HVP: \t    {hessian @ gradient}")
     # print(f"Approximated HVP:   {hessians.hvp(total_loss, model, gradient)}")
-    # print(f"Actual IHVP: \t    {torch.inverse(hessian) @ gradient}")
+    print(f"Actual IHVP: \t    {torch.inverse(hessian) @ gradient}")
     # print(f"Approximated IHVP:  {hessians.ihvp(total_loss, model, gradient)}")
-    print(f"Influence function: {hessians.influence(loss, total_loss/3, model)*3}")
+    print(f"Influence function: {hessians.influence(loss, total_loss/3, model)/3}")
     # num_params = sum(p.numel() for p in model.parameters())
     # print(
     #     f"Influence function via PIF:  \t    {hessians.partial_influence(list(range(num_params)), loss, total_loss, model)}"
@@ -130,13 +130,11 @@ def __main__():
         @ gradient
     )
     print(f"Approximated PIF for index {index_list}:")
-    print(hessians.partial_influence(index_list, loss, total_loss, model, tol=1e-5))
+    print(hessians.partial_influence(index_list, loss, total_loss, model, tol=1e-8))
     print("Approximated PIF (Boosted):")
     print(
-        2.5
-        * hessians.partial_influence(
-            index_list, loss, total_loss / 2.5, model, tol=1e-8
-        )
+        hessians.partial_influence(index_list, loss, total_loss / 2.5, model, tol=1e-8)
+        / 2.5
     )
 
 
