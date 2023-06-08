@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import __init__
 import hessians
 
 
@@ -71,7 +72,7 @@ def __main__():
     # model = LinearRegressionHiddenLayer()
     # Define the loss function (mean squared error) and optimizer (Stochastic Gradient Descent)
     # criterion = nn.MSELoss()
-    criterion = RegularziedMSELoss(model, scale=0.8, alpha=0.1)
+    criterion = RegularziedMSELoss(model, scale=1, alpha=0.1)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
     # Train the model
