@@ -113,6 +113,13 @@ pretrained_weights/*
 
 # Data
 data/*
+data
+data/.keep
 */data/*
-!data/.keep
 */wandb/*
+
+# Results files
+*.eps
+
+# Legacy files
+legacy/*
