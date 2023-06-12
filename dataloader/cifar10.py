@@ -10,7 +10,7 @@ class CIFAR10DataLoader:
     def get_data_loaders(self):
         # Load the CIFAR-10 dataset
         train_dataset = datasets.CIFAR10(
-            root="../data",
+            root="data",
             train=True,
             download=True,
             transform=transforms.Compose(
@@ -26,7 +26,7 @@ class CIFAR10DataLoader:
         )
 
         test_dataset = datasets.CIFAR10(
-            root="../data",
+            root="data",
             train=False,
             download=True,
             transform=transforms.Compose(
