@@ -120,6 +120,8 @@ data/.keep
 
 # Results files
 *.eps
+checkpoints
+checkpoints/*
 
 # Legacy files
 legacy/*
