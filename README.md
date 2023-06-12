@@ -11,5 +11,5 @@ The art of programming is reproduction.
 Here is the list of repos I refered.
 I deeply appreciate for the authors of the repos.
 
-* models: [kuangliu/pytorch-cifar](https://github.com/kuangliu/pytorch-cifar)
-* Lanczos method for estimating the eigenvalue distribution:[noahgolmant/pytorch-hessian-eigenthings](https://github.com/noahgolmant/pytorch-hessian-eigenthings)
+* Models: [kuangliu/pytorch-cifar](https://github.com/kuangliu/pytorch-cifar)
+* Lanczos method:[noahgolmant/pytorch-hessian-eigenthings](https://github.com/noahgolmant/pytorch-hessian-eigenthings)
