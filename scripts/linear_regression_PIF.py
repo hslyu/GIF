@@ -3,8 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-import __init__
-import hessians
+from src import hessians, lanczos
 
 
 class RegularziedMSELoss(nn.Module):
@@ -17,25 +16,24 @@ class RegularziedMSELoss(nn.Module):
         scale (float): Scale of the loss. Useful for makeing the spectral norm of hessian <= 1
     """
 
-    def __init__(self, model: nn.Module, scale=1.0, alpha=0.1):
+    def __init__(self, model: nn.Module, weight=0.001):
         super(RegularziedMSELoss, self).__init__()
         self.model = model
-        self.scale = scale
-        self.alpha = alpha
+        self.weight = weight
 
     def forward(self, pred, target):
         mseloss = nn.MSELoss()
         params = torch.cat([param.view(-1) for param in self.model.parameters()])
-        return (
-            mseloss(pred, target) + self.alpha * torch.norm(params) / 2
-        ) * self.scale
+        return (mseloss(pred, target) + self.weight * torch.norm(params) / 2) / (
+            1 + self.weight
+        )
 
 
 class LinearRegression(nn.Module):
     # Define the linear regression model
     def __init__(self):
         super(LinearRegression, self).__init__()
-        self.linear = nn.Linear(2, 1)
+        self.linear = nn.Linear(5, 1)
 
     def forward(self, x):
         y_pred = self.linear(x)
@@ -46,8 +44,8 @@ class LinearRegressionHiddenLayer(nn.Module):
     # Define the linear regression model
     def __init__(self):
         super(LinearRegressionHiddenLayer, self).__init__()
-        self.linear1 = nn.Linear(2, 2)
-        self.linear2 = nn.Linear(2, 2)
+        self.linear1 = nn.Linear(5, 5)
+        self.linear2 = nn.Linear(5, 2)
         self.linear3 = nn.Linear(2, 1)
 
     def forward(self, x):
@@ -61,18 +59,27 @@ def __main__():
     # Generate some dummy data
     np.random.seed(0)
     num_samples = 10000
-    x = np.random.rand(num_samples, 2)
-    y = 2 * x[:, 0:1] + 3 * x[:, 1:2] + 1 + 0.5 * np.random.randn(num_samples, 1)
+    x = np.random.rand(num_samples, 5)
+    y = (
+        2 * x[:, 0:1]
+        + 3 * x[:, 1:2]
+        - x[:, 2:3]
+        + 5 * x[:, 3:4]
+        - 4 * x[:, 4:5]
+        + 0.5 * np.random.randn(num_samples, 1)
+        + 1
+    )
 
     # Convert the data to PyTorch tensors
     x_tensor = torch.from_numpy(x).float()
     y_tensor = torch.from_numpy(y).float()
+    print(x_tensor.size(), y_tensor.size())
 
-    model = LinearRegression()
-    # model = LinearRegressionHiddenLayer()
+    # model = LinearRegression()
+    model = LinearRegressionHiddenLayer()
     # Define the loss function (mean squared error) and optimizer (Stochastic Gradient Descent)
     # criterion = nn.MSELoss()
-    criterion = RegularziedMSELoss(model, scale=1, alpha=0.1)
+    criterion = RegularziedMSELoss(model, 3)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
     # Train the model
@@ -107,10 +114,7 @@ def __main__():
     gradient = hessians.compute_gradient(loss, model)
     hessian = hessians.compute_hessian(total_loss, model)
 
-    # print(f"{hessian=}")
-    print("Eigenvalues of hessian")
-    print(torch.linalg.eig(hessian).eigenvalues.real)
-    print("")
+    print("-----------Inverse hessian vector product accuracy test------------\n")
     # print(torch.linalg.eig((hessian @ hessian)[:2, :2]))
     # print(f"Actual HVP: \t    {hessian @ gradient}")
     # print(f"Approximated HVP:   {hessians.hvp(total_loss, model, gradient)}")
@@ -122,21 +126,32 @@ def __main__():
     #     f"Influence function via PIF:  \t    {hessians.partial_influence(list(range(num_params)), loss, total_loss, model)}"
     # )
 
-    index_list = [0, 2]
-    partial_hessian = hessian[:, index_list]
-    print(f"Actual PIF for index {index_list}:")
+    print("-----------Partial influence function accuracy test------------\n")
+    # index_list = [0, 2]
+    # partial_hessian = hessian[:, index_list]
+    # print(f"Actual PIF for index {index_list}:")
+    # print(
+    #     torch.linalg.inv(partial_hessian.T @ partial_hessian)
+    #     @ partial_hessian.T
+    #     @ gradient
+    # )
+    # print(f"Approximated PIF for index {index_list}:")
+    # print(hessians.partial_influence(index_list, loss, total_loss, model, tol=1e-8))
+    # print("Approximated PIF (Boosted):")
+    # print(
+    #     hessians.partial_influence(index_list, loss, total_loss / 2.5, model, tol=1e-8)
+    #     / 2.5
+    # )
+
+    print("-----------Lanzcos algorithm test------------\n")
+    eigvals, _ = lanczos.lanczos(loss, model)
+    num_lanczos_eigval = sum(p.numel() for p in model.parameters()) - 1
     print(
-        torch.linalg.inv(partial_hessian.T @ partial_hessian)
-        @ partial_hessian.T
-        @ gradient
+        f"Negative eigval rate by Lanczos algorithms: {np.sum(eigvals < -1e-3)/num_lanczos_eigval}"
     )
-    print(f"Approximated PIF for index {index_list}:")
-    print(hessians.partial_influence(index_list, loss, total_loss, model, tol=1e-8))
-    print("Approximated PIF (Boosted):")
-    print(
-        hessians.partial_influence(index_list, loss, total_loss / 2.5, model, tol=1e-8)
-        / 2.5
-    )
+    print(f"Lanczos algorithms: \n{np.sort(eigvals)}")
+    # print("Eigenvalues of hessian")
+    # print(torch.sort(torch.linalg.eig(hessian).eigenvalues.real).values)
 
 
 if __name__ == "__main__":
