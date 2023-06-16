@@ -42,4 +42,4 @@ net_list = [
 ]
 for net in net_list:
     num_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
-    print(f"Network: {type(net)}, Parameters={num_params/1000000:.2f}M")
+    print(f"Network: {net.__class__.__name__}, Parameters={num_params/1000000:.2f}M")
