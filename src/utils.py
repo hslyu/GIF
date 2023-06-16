@@ -12,6 +12,26 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
+from models import *
+
+_, term_width = os.popen("stty size", "r").read().split()
+term_width = int(term_width)
+
+TOTAL_BAR_LENGTH = 65.0
+last_time = time.time()
+begin_time = last_time
+
+
+def prepare_model(name: str, cfg: str = ""):
+    if cfg == "":
+        return globals()[name]()
+    else:
+        return globals()[name](cfg)
+
+
+def maybe_fp16(vec, fp16):
+    return vec.half() if fp16 else vec.float()
+
 
 def get_mean_and_std(dataset):
     """Compute the mean and std value of dataset."""
@@ -44,14 +64,6 @@ def init_params(net):
             init.normal(m.weight, std=1e-3)
             if m.bias:
                 init.constant(m.bias, 0)
-
-
-_, term_width = os.popen("stty size", "r").read().split()
-term_width = int(term_width)
-
-TOTAL_BAR_LENGTH = 65.0
-last_time = time.time()
-begin_time = last_time
 
 
 def progress_bar(current, total, msg=None):
