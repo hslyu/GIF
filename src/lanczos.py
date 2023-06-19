@@ -7,7 +7,11 @@ import scipy.sparse.linalg as linalg
 import torch
 from scipy.sparse.linalg import LinearOperator as ScipyLinearOperator
 
-from . import hessians, utils
+from . import hessians
+
+
+def maybe_fp16(vec, fp16):
+    return vec.half() if fp16 else vec.float()
 
 
 def lanczos(
@@ -76,11 +80,11 @@ def lanczos(
 
     def _scipy_apply(vec):
         vec = torch.from_numpy(vec)
-        vec = utils.maybe_fp16(vec, fp16)
+        vec = maybe_fp16(vec, fp16)
         if use_gpu:
             vec = vec.cuda()
         out = hessians.hvp(loss, model, vec)
-        out = utils.maybe_fp16(out, fp16)
+        out = maybe_fp16(out, fp16)
         out = out.cpu().numpy()
         return out
 
