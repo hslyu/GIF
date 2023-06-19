@@ -19,6 +19,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def get_args():
     parser = argparse.ArgumentParser(description="PyTorch CIFAR10 Training")
+    parser.add_argument("--path", default=1, type=int, help="experiment number")
     parser.add_argument("--lr", default=0.1, type=float, help="learning rate")
     parser.add_argument("--num_epoch", default=50, type=int, help="learning rate")
     parser.add_argument("--alpha", type=float, help="Regularlization weight")
@@ -37,11 +38,11 @@ def get_args():
         help="Dataset to be used",
     )
     parser.add_argument(
-        "--loss",
+        "--criterion",
         default="cross_entropy",
         choices=["cross_entropy", "mse"],
         type=str,
-        help="Loss function",
+        help="Loss criterion function",
     )
     parser.add_argument(
         "--resume", "-r", action="store_true", help="resume from checkpoint"
@@ -88,7 +89,8 @@ def train(net, dataloader, optimizer, criterion):
 
 
 def test(net, net_name, dataloader, criterion, epoch, args):
-    global best_acc
+    global best_loss
+    global count
 
     net.eval()
     test_loss = 0
@@ -118,26 +120,40 @@ def test(net, net_name, dataloader, criterion, epoch, args):
                 ),
             )
 
-    # Save checkpoint.
-    acc = 100.0 * correct / total
-    if acc > best_acc:
-        print(f"Saving the model: {acc} > {best_acc}")
+    if test_loss < best_loss:
+        print(f"Saving the model: {test_loss:.2f} < {best_loss:.2f}")
+        print(
+            f"checkpoints/{args.path}/{net_name}/{args.criterion}/ckpt_{args.alpha}.pth"
+        )
         state = {
             "net": net.state_dict(),
-            "acc": acc,
+            "loss": test_loss,
             "epoch": epoch,
             "alpha": args.alpha,
-            "loss": args.loss,
+            "criterion": args.criterion,
+            "count": count,
         }
-        if not os.path.isdir(f"checkpoints/{net_name}/{args.loss}"):
-            print(f"checkpoints/{net_name}/{args.loss}/")
-            os.makedirs(f"checkpoints/{net_name}/{args.loss}/")
-        torch.save(state, f"checkpoints/{net_name}/{args.loss}/ckpt_{args.alpha}.pth")
-        best_acc = acc
+        if not os.path.isdir(f"checkpoints/{args.path}/{net_name}/{args.criterion}"):
+            os.makedirs(f"checkpoints/{args.path}/{net_name}/{args.criterion}/")
+        torch.save(
+            state,
+            f"checkpoints/{args.path}/{net_name}/{args.criterion}/ckpt_{args.alpha}.pth",
+        )
+        best_loss = test_loss
+        count = 0
+    else:
+        count += 1
+
+    if count >= 5:
+        print("Early Stopping")
+        return True
+
+    return False
 
 
 def main():
     args = get_args()
+    torch.manual_seed(int(args.path))
 
     # Network configuration
     print("==> Building Model..")
@@ -159,28 +175,32 @@ def main():
 
     # Load checkpoint.
     print("==> Resuming from checkpoint..")
-    global best_acc
+    global best_loss
+    global count
+
     if args.resume:
         assert os.path.isfile(
-            f"checkpoints/{net_name}/{args.loss}/ckpt_{args.alpha}.pth"
+            f"checkpoints/{args.path}/{net_name}/{args.criterion}/ckpt_{args.alpha}.pth"
         ), "Error: no checkpoint file found!"
         checkpoint = torch.load(
-            f"checkpoints/{net_name}/{args.loss}/ckpt_{args.alpha}.pth"
+            f"checkpoints/{args.path}/{net_name}/{args.criterion}/ckpt_{args.alpha}.pth"
         )
         net.load_state_dict(checkpoint["net"])
-        best_acc = checkpoint["acc"]
+        best_loss = checkpoint["loss"]
         start_epoch = checkpoint["epoch"]
+        count = checkpoint["count"]
         assert (
             checkpoint["alpha"] == args.alpha
         ), "Error: alpha is not equal to checkpoint value!"
         assert (
-            checkpoint["loss"] == args.loss
+            checkpoint["criterion"] == args.criterion
         ), "Error: loss is not equal to checkpoint value!"
     else:
-        best_acc = 0
+        best_loss = 1e9
         start_epoch = 0
+        count = 0
 
-    if args.loss == "cross_entropy":
+    if args.criterion == "cross_entropy":
         criterion = regularization.RegularizedLoss(
             net, nn.CrossEntropyLoss(), args.alpha
         )
@@ -189,7 +209,7 @@ def main():
         criterion = regularization.RegularizedLoss(net, nn.MSELoss(), args.alpha)
         one_hot = True
     print(
-        f"==> Current criterion: {criterion.__class__.__name__} with {args.loss} and alpha={args.alpha}"
+        f"==> Current criterion: {criterion.__class__.__name__} with {args.criterion} and alpha={args.alpha}"
     )
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
@@ -197,7 +217,7 @@ def main():
     # Data
     print("==> Preparing data..")
     batch_size = 512
-    num_workers = 6
+    num_workers = 4
 
     if args.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
@@ -209,8 +229,12 @@ def main():
         print("\nEpoch: %d" % epoch)
         train(net, train_loader, optimizer, criterion)
         train(net, val_loader, optimizer, criterion)
-        test(net, net_name, test_loader, criterion, epoch, args)
+        early_stopping_flag = test(net, net_name, test_loader, criterion, epoch, args)
         scheduler.step()
+
+        if early_stopping_flag:
+            print("Early Stopping")
+            break
 
 
 if __name__ == "__main__":
