@@ -4,7 +4,13 @@ To be updated...
 
 # Experiments in Sec. 2.2
 
-
+# Training the models
+```
+run/recursive_model_train.sh LeNet cross_entropy CIFAR10
+run/recursive_model_train.sh LeNet mse CIFAR10
+run/recursive_model_train.sh FCN cross_entropy MNIST
+run/recursive_model_train.sh FCN mse MNIST
+```
 # Acknowledgements
 
 The art of programming is reproduction.
