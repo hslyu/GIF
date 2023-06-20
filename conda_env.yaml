@@ -318,7 +318,6 @@ dependencies:
       - flake8==6.0.0
       - fqdn==1.5.1
       - genomes==1.1.0
-      - hessian-eigenthings==0.0.2
       - idna==3.4
       - ipywidgets==8.0.6
       - isoduration==20.11.0
