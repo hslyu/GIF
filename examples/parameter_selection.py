@@ -39,7 +39,6 @@ def main():
     parameter_parser = parameter_selection.TopNActivations(net, 100)
     parameter_parser.register_hook()
 
-    print("==> Evaluate model loss and hessian..")
     # One batch of train data
     data, target = next(iter(test_loader))
     loss = criterion(net(data.to(device)), target.to(device))
