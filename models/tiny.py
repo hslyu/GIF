@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class TinyNet(nn.Module):
-    def __init__(self, **kwargs):
+    def __init__(self):
         super(TinyNet, self).__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(1, 5, 7, 5, 5),
