@@ -110,6 +110,25 @@ def progress_bar(current, total, msg=None):
     sys.stdout.flush()
 
 
+def update_network(net, change_list, index_list):
+    try:
+        with torch.no_grad():
+            param_iter = net.parameters()
+            param = next(param_iter).flatten()
+            index_offset = 0
+            for change, index in zip(change_list, index_list):
+                while len(param) + index_offset <= index:
+                    index_offset += len(param)
+                    param = next(param_iter).flatten()
+                param.data[index - index_offset] += change
+    except StopIteration:
+        print(
+            "No more parameters to retrieve. \
+            Something probably goes wrong with the indices"
+        )
+        exit()
+
+
 def format_time(seconds):
     days = int(seconds / 3600 / 24)
     seconds = seconds - days * 3600 * 24
