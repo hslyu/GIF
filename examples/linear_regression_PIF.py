@@ -127,24 +127,19 @@ def __main__():
     # )
 
     print("-----------Partial influence function accuracy test------------\n")
-    # index_list = [0, 2]
-    # partial_hessian = hessian[:, index_list]
-    # print(f"Actual PIF for index {index_list}:")
-    # print(
-    #     torch.linalg.inv(partial_hessian.T @ partial_hessian)
-    #     @ partial_hessian.T
-    #     @ gradient
-    # )
-    # print(f"Approximated PIF for index {index_list}:")
-    # print(hessians.partial_influence(index_list, loss, total_loss, model, tol=1e-8))
-    # print("Approximated PIF (Boosted):")
-    # print(
-    #     hessians.partial_influence(index_list, loss, total_loss / 2.5, model, tol=1e-8)
-    #     / 2.5
-    # )
+    index_list = [0, 2]
+    partial_hessian = hessian[:, index_list]
+    print(f"Actual PIF for index {index_list}:")
+    print(
+        torch.linalg.inv(partial_hessian.T @ partial_hessian)
+        @ partial_hessian.T
+        @ gradient
+    )
+    print(f"Approximated PIF for index {index_list}:")
+    print(hessians.partial_influence(index_list, loss, total_loss, model))
 
     print("-----------Lanzcos algorithm test------------\n")
-    eigvals, _ = lanczos.lanczos(loss, model)
+    eigvals = lanczos.lanczos(loss, model, num_lanczos_vectors=100)
     num_lanczos_eigval = sum(p.numel() for p in model.parameters()) - 1
     print(
         f"Negative eigval rate by Lanczos algorithms: {np.sum(eigvals < -1e-3)/num_lanczos_eigval}"
