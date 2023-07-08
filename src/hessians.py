@@ -4,6 +4,8 @@
 # Author: Hyeonsu Lyu
 # Contact: hslyu4@postech.ac.kr
 
+import time
+
 import torch
 
 
@@ -12,7 +14,7 @@ def compute_hessian(loss, model) -> torch.Tensor:
     # gradients = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     # # Flatten the gradients into a single vector
     # gradients = torch.cat([grad.view(-1) for grad in gradients])
-    gradients = compute_gradient(loss, model, True)
+    gradients = compute_gradient(loss, model, create_graph=True)
     # Compute the Hessian matrix
     hessian = torch.zeros(gradients.size()[0], gradients.size()[0])
     for idx in range(gradients.size()[0]):
@@ -42,7 +44,7 @@ def compute_gradient(loss, model, create_graph=False) -> torch.Tensor:
 
 
 def ihvp(
-    loss: torch.Tensor, model: torch.nn.Module, v: torch.Tensor, tol: float = 1e-5
+    loss: torch.Tensor, model: torch.nn.Module, v: torch.Tensor, tol: float = 1e-4
 ) -> torch.Tensor:
     """
     A Simple and Efficient Algorithm for Computing the Inverse Hessian-Vector Product.
@@ -72,7 +74,12 @@ def ihvp(
     return IHVP_new
 
 
-def hvp(loss: torch.Tensor, model: torch.nn.Module, v: torch.Tensor) -> torch.Tensor:
+def hvp(
+    loss: torch.Tensor,
+    model: torch.nn.Module,
+    v: torch.Tensor,
+    create_graph: bool = True,
+) -> torch.Tensor:
     """
     Fast hessian-vector product (HVP) algorithm.
     Reference:  Pearlmutter, B. A. "Fast exact multiplication by the hessian."
@@ -86,7 +93,9 @@ def hvp(loss: torch.Tensor, model: torch.nn.Module, v: torch.Tensor) -> torch.Te
         torch.Tensor: Hessian-vector product
     """
 
-    grads = torch.autograd.grad(loss, list(model.parameters()), create_graph=True)
+    grads = torch.autograd.grad(
+        loss, list(model.parameters()), create_graph=create_graph, retain_graph=True
+    )
     grads = torch.cat([grad.view(-1) for grad in grads])
     hvp = torch.autograd.grad(
         grads, list(model.parameters()), grad_outputs=v, retain_graph=True
@@ -117,30 +126,45 @@ def influence(
 
 def partial_influence(
     index_list: list,
-    loss: torch.Tensor,
+    target_loss: torch.Tensor,
     total_loss: torch.Tensor,
     model: torch.nn.Module,
-    tol: float = 1e-5,
+    tol: float = 1e-4,
+    step: float = 0.5,
 ) -> torch.Tensor:
     """
     Compute partial influence function of a given loss
 
     Parameters:
-        loss (torch.Tensor): loss where gradient is computed.
-                             The original influence function takes data points as input,
-                             but this function takes loss for some generalization issues.
+        index_list: list of indices of the parameters where partial influence is computed.
+        target_loss (torch.Tensor): Loss where gradient is computed.
+                                    The original influence function takes data points as input,
+                                    but this function takes loss for some generalization issues.
         total_loss (torch.Tensor): loss where hessian is computed.
         model (torch.nn.Module): Model where gradient and hessian is computed.
-        idx (int): index of the parameter where partial influence is computed.
+        tol (float): tolerance level for computing inverse hessian-vector product.
+        step (float): step size for normalizing the hessian and gradient.
 
     Returns:
         torch.Tensor: Partial influence function
     """
 
-    v = hvp(total_loss, model, compute_gradient(loss, model))
-    PIF = iphvp(index_list, total_loss, model, v[index_list], tol)
-
-    return PIF
+    normalizer = 1
+    while True:
+        v = hvp(
+            total_loss / normalizer,
+            model,
+            compute_gradient(target_loss / normalizer, model),
+        )
+        PIF = iphvp(index_list, total_loss / normalizer, model, v[index_list], tol)
+        if PIF is not None:
+            print("")
+            return PIF
+        else:
+            print(
+                f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}"
+            )
+            normalizer += step
 
 
 def iphvp(
@@ -149,7 +173,7 @@ def iphvp(
     model: torch.nn.Module,
     v: torch.Tensor,
     tol: float = 1e-5,
-) -> torch.Tensor:
+):
     """
     A Simple and Efficient Algorithm for Computing the Pseudo-inverse of partial Hessian-Vector Product.
 
@@ -167,19 +191,31 @@ def iphvp(
         """
         Subhessian-vector product
         """
-        num_params = sum(p.numel() for p in model.parameters())
-        spanned_v = torch.zeros(num_params, device=v.device)
-        spanned_v[index_list] = v
-        twice_HVP = hvp(loss, model, hvp(loss, model, spanned_v))
+        zeropad_v = torch.zeros(num_params, device=v.device)
+        zeropad_v[index_list] = v
+        twice_HVP = hvp(loss, model, hvp(loss, model, zeropad_v, True), True)
 
         return twice_HVP[index_list]
 
+    num_params = sum(p.numel() for p in model.parameters())
     IHVP_old = v
     IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
+    diff_old = torch.norm(IHVP_new - IHVP_old)
+    diff_new = 1e8
     count = 1
-    while torch.norm(IHVP_new - IHVP_old) > tol and count < 10000:
+    elapsed_time = 0
+    while diff_new > tol and count < 10000:
+        start = time.time()
         IHVP_old = IHVP_new
         IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
+        diff_new = torch.norm(IHVP_new - IHVP_old)
+        if diff_new > diff_old:
+            return
         count += 1
+        elapsed_time += time.time() - start
+        print(
+            f"Computing partial influence ... [{count}/10000], Tolerance: {diff_new:.4f}, Elapsed time: {elapsed_time/count:.2f}s",
+            end="\r",
+        )
 
     return IHVP_new
