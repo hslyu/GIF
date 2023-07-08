@@ -18,7 +18,7 @@ from resnext import *
 from senet import *
 from shufflenet import *
 from shufflenetv2 import *
-from tinynet import *
+from tiny import *
 from vgg import *
 
 net_list = [
