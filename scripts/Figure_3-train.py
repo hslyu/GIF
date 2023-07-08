@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10, mnist
-from models import TinyNet
+from models import FullyConnectedNet, TinyNet
 from src import regularization, utils
 
 # from src import hessians
@@ -23,7 +23,7 @@ class Config:
     lr: float = 0.1
     num_epoch: int = 200
     alpha: float = 0.0
-    network: str = "TinyNet"
+    network: str = "FullyConnectedNet"
     data: str = "MNIST"
     criterion: str = "cross_entropy"
     resume: bool = False
@@ -139,8 +139,9 @@ def main():
 
     # Network configuration
     print("==> Building Model..")
-    net = TinyNet().to(device)
-    flatten = False
+    # net = TinyNet().to(device)
+    net = FullyConnectedNet(28 * 28, 8, 10, 3, 0.1).to(device)
+    flatten = True
     net_name = net.__class__.__name__
     print(
         f"==> Building {net_name} finished. "
