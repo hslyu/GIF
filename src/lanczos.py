@@ -92,14 +92,14 @@ def lanczos(
     if init_vec == np.empty(0):
         init_vec = np.random.rand(size)
 
-    eigenvals, eigenvecs = linalg.eigsh(
+    eigenvals = linalg.eigsh(
         A=scipy_op,
         k=num_eigenthings,
         which=which,
         maxiter=max_steps,
         tol=tol,
         ncv=num_lanczos_vectors,
-        return_eigenvectors=True,
+        return_eigenvectors=False,
     )
 
-    return eigenvals, eigenvecs.T
+    return eigenvals
