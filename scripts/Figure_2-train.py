@@ -153,7 +153,11 @@ def test(net, net_name, dataloader, criterion, epoch, args):
 
 def main():
     args = get_args()
-    torch.manual_seed(int(args.path))
+    # Manual_seed makes an error only when the args.path is 17,28,81
+    if int(args.path) == 17 or int(args.path) == 28 or int(args.path) == 81:
+        torch.manual_seed(100 + int(args.path))
+    else:
+        torch.manual_seed(int(args.path))
 
     # Network configuration
     print("==> Building Model..")
