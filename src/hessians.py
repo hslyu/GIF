@@ -101,7 +101,7 @@ def hvp(
         grads, list(model.parameters()), grad_outputs=v, retain_graph=True
     )
 
-    return torch.cat([grad.view(-1) for grad in hvp])
+    return torch.cat([grad.flatten() for grad in hvp])
 
 
 def influence(
