@@ -5,6 +5,7 @@ from warnings import warn
 import numpy as np
 import scipy.sparse.linalg as linalg
 import torch
+from scipy.sparse.linalg import ArpackNoConvergence
 from scipy.sparse.linalg import LinearOperator as ScipyLinearOperator
 
 from . import hessians
@@ -25,7 +26,7 @@ def lanczos(
     init_vec: np.ndarray = np.empty(0),
     use_gpu: bool = False,
     fp16: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
+):
     """
     Use the scipy.sparse.linalg.eigsh hook to the ARPACK lanczos algorithm
     to find the top k eigenvalues/eigenvectors.
@@ -92,14 +93,17 @@ def lanczos(
     if init_vec == np.empty(0):
         init_vec = np.random.rand(size)
 
-    eigenvals = linalg.eigsh(
-        A=scipy_op,
-        k=num_eigenthings,
-        which=which,
-        maxiter=max_steps,
-        tol=tol,
-        ncv=num_lanczos_vectors,
-        return_eigenvectors=False,
-    )
+    try:
+        eigenvals = linalg.eigsh(
+            A=scipy_op,
+            k=num_eigenthings,
+            which=which,
+            maxiter=max_steps,
+            tol=tol,
+            ncv=num_lanczos_vectors,
+            return_eigenvectors=False,
+        )
+    except ArpackNoConvergence as e:
+        eigenvals = e.eigenvalues
 
     return eigenvals
