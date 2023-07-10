@@ -46,7 +46,7 @@ def forward(net, dataloader, criterion):
 
 def main():
     torch.manual_seed(0)
-    net = FullyConnectedNet(28 * 28, 8, 10, 3, 0.1).to(device)
+    net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
     if device == "cuda":
         net = torch.nn.DataParallel(net)
         cudnn.benchmark = True
@@ -60,9 +60,9 @@ def main():
     # For just doing some exps
     # net = FullyConnectedNet(28 * 28, 600, 10, 200, 0.1).to(device)
     # train_epoch = 50
-    net = TinyNet().to(device)
-    train_epoch = 50
-    flatten = False
+    # net = TinyNet().to(device)
+    # train_epoch = 50
+    # flatten = False
 
     net.eval()
     net_name = net.__class__.__name__
