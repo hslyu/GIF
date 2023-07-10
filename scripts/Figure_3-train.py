@@ -140,7 +140,7 @@ def main():
     # Network configuration
     print("==> Building Model..")
     # net = TinyNet().to(device)
-    net = FullyConnectedNet(28 * 28, 8, 10, 3, 0.1).to(device)
+    net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
     flatten = True
     net_name = net.__class__.__name__
     print(
