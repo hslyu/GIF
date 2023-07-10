@@ -198,6 +198,8 @@ def iphvp(
         return twice_HVP[index_list]
 
     num_params = sum(p.numel() for p in model.parameters())
+    num_index = len(index_list)
+    tol = tol * num_index**0.5
     IHVP_old = v
     IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
     diff_old = torch.norm(IHVP_new - IHVP_old)
