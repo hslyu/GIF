@@ -161,9 +161,12 @@ def partial_influence(
             print("")
             return PIF
         else:
-            print(
-                f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}"
-            )
+            # print(
+            #     f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
+            #     + " " * 30,
+            #     end="\r",
+            #     flush=True,
+            # )
             normalizer += step
 
 
@@ -198,26 +201,29 @@ def iphvp(
         return twice_HVP[index_list]
 
     num_params = sum(p.numel() for p in model.parameters())
-    num_index = len(index_list)
-    tol = tol * num_index**0.5
-    IHVP_old = v
-    IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
-    diff_old = torch.norm(IHVP_new - IHVP_old)
-    diff_new = 1e8
-    count = 1
+    tol = tol * len(index_list) ** 0.5
+    # initial settings
+    diff = tol + 0.1
+    diff_old = 1e10
+    IHVP_new = v
+    count = 0
     elapsed_time = 0
-    while diff_new > tol and count < 10000:
+    while diff > tol and count < 10000:
         start = time.time()
         IHVP_old = IHVP_new
         IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
-        diff_new = torch.norm(IHVP_new - IHVP_old)
-        if diff_new > diff_old:
-            return
-        count += 1
+        diff = torch.norm(IHVP_new - IHVP_old)
+        if count % 2 == 0:
+            if diff > diff_old:
+                return
+            diff_old = diff
         elapsed_time += time.time() - start
+        count += 1
         print(
-            f"Computing partial influence ... [{count}/10000], Tolerance: {diff_new:.4f}, Elapsed time: {elapsed_time/count:.2f}s",
+            f"Computing partial influence ... [{count}/10000], Tolerance: {diff/ len(index_list) ** 0.5:.3E}, Avg. computing time: {elapsed_time/count:.3f}s"
+            + " " * 10,
             end="\r",
+            flush=True,
         )
 
     return IHVP_new
