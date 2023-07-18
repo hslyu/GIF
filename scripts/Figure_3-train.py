@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10, mnist
-from models import FullyConnectedNet, TinyNet
+from models import FullyConnectedNet, ResNet18
 from src import regularization, utils
 
 # from src import hessians
@@ -23,11 +23,13 @@ class Config:
     lr: float = 0.1
     num_epoch: int = 200
     alpha: float = 0.0
+    # network: str = "ResNet18"
     network: str = "FullyConnectedNet"
     data: str = "MNIST"
     criterion: str = "cross_entropy"
     resume: bool = False
     path: str = "Figure_3"
+    early_stop: int = 30
 
 
 def _correct_fn(predicted: torch.Tensor, targets: torch.Tensor):
@@ -99,9 +101,9 @@ def test(net, net_name, dataloader, criterion, epoch, configs):
                     total,
                 ),
             )
-
+    test_loss = test_loss / len(dataloader)
     if test_loss < best_loss:
-        print(f"Saving the model: {test_loss:.2f} < {best_loss:.2f}")
+        print(f"Saving the model: {test_loss:.3f} < {best_loss:.3f}")
         print(
             f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
         )
@@ -126,7 +128,7 @@ def test(net, net_name, dataloader, criterion, epoch, configs):
     else:
         count += 1
 
-    if count >= 20:
+    if count >= configs.early_stop:
         print("Early Stopping")
         return True
 
@@ -139,9 +141,13 @@ def main():
 
     # Network configuration
     print("==> Building Model..")
-    # net = TinyNet().to(device)
-    net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
-    flatten = True
+    if configs.network == "FullyConnectedNet":
+        # net = TinyNet().to(device)
+        net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
+        flatten = True
+    elif configs.network == "ResNet18":
+        net = ResNet18(1).to(device)
+        flatten = False
     net_name = net.__class__.__name__
     print(
         f"==> Building {net_name} finished. "
@@ -149,7 +155,6 @@ def main():
     )
 
     if device == "cuda":
-        net = torch.nn.DataParallel(net)
         cudnn.benchmark = True
 
     # Load checkpoint.
@@ -198,7 +203,7 @@ def main():
     # Data
     print("==> Preparing data..")
     batch_size = 512
-    num_workers = 4
+    num_workers = 16
 
     if configs.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
