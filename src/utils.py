@@ -3,19 +3,20 @@
     - msr_init: net parameter initialization.
     - progress_bar: progress bar mimic xlua.progress.
 """
-import math
 import os
 import sys
 import time
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 
 from models import *
 
-_, term_width = os.popen("stty size", "r").read().split()
-term_width = int(term_width)
+# _, term_width = os.popen("stty size", "r").read().split()
+# term_width = int(term_width)
+term_width = 200
 
 TOTAL_BAR_LENGTH = 65.0
 last_time = time.time()
@@ -111,6 +112,9 @@ def progress_bar(current, total, msg=None):
 
 
 def update_network(net, change_list, index_list):
+    sorted_indices = np.argsort(index_list)
+    index_list = index_list[sorted_indices]
+    change_list = change_list[sorted_indices]
     try:
         with torch.no_grad():
             param_iter = net.parameters()
