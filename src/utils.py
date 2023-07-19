@@ -112,25 +112,33 @@ def progress_bar(current, total, msg=None):
 
 
 def update_network(net, change_list, index_list):
-    sorted_indices = np.argsort(index_list)
-    index_list = index_list[sorted_indices]
-    change_list = change_list[sorted_indices]
-    try:
-        with torch.no_grad():
-            param_iter = net.parameters()
-            param = next(param_iter).flatten()
-            index_offset = 0
-            for change, index in zip(change_list, index_list):
-                while len(param) + index_offset <= index:
-                    index_offset += len(param)
-                    param = next(param_iter).flatten()
-                param.data[index - index_offset] += change
-    except StopIteration:
-        print(
-            "No more parameters to retrieve. \
-            Something probably goes wrong with the indices"
-        )
-        exit()
+    # Get modules to be updated and their last index as lists
+    stacked_num_param_list = []
+    param_list = []
+    stacked_num_param = 0
+    for module in net.modules():
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+            for p in module.parameters():
+                if p.requires_grad:
+                    stacked_num_param += p.numel()
+                    stacked_num_param_list.append(stacked_num_param)
+                    param_list.append(p.flatten())
+        elif (
+            isinstance(module, nn.BatchNorm1d)
+            or isinstance(module, nn.BatchNorm2d)
+            or isinstance(module, nn.BatchNorm3d)
+        ):
+            for p in module.parameters():
+                if p.requires_grad:
+                    stacked_num_param += p.numel()
+
+    with torch.no_grad():
+        for change, index in zip(change_list, index_list):
+            for param, stacked_num_param in zip(param_list, stacked_num_param_list):
+                if index < stacked_num_param:
+                    start_index = stacked_num_param - param.numel()
+                    param.data[index - start_index] += change
+                    break
 
 
 def format_time(seconds):
