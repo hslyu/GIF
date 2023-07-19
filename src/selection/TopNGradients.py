@@ -13,8 +13,9 @@ class TopNGradients(Selection):
         self.current = 0
         self.require_backward = True
 
+        self.sum = 0
         self.net = net
-        self.num_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
+        self.num_params = self._compute_num_param()
         for module in net.modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 self.first_module = module
@@ -45,8 +46,12 @@ class TopNGradients(Selection):
                 # Get list of indices of neurons with highest activation
                 batch_abs_mean = torch.abs(torch.mean(grad_output[0], (0, 2, 3)))
 
-            num_required_indices = quota // (num_weights_per_output + 1)
-            leftover = quota % (num_weights_per_output + 1)
+            if module.bias is not None:
+                num_required_indices = quota // (num_weights_per_output + 1)
+                leftover = quota % (num_weights_per_output + 1)
+            else:
+                num_required_indices = quota // (num_weights_per_output)
+                leftover = quota % (num_weights_per_output)
             index_list = torch.sort(batch_abs_mean, descending=True)[1]
             # Add the indices of weights
             for index in index_list[:num_required_indices]:
@@ -75,120 +80,32 @@ class TopNGradients(Selection):
                 ] = indices[:leftover]
                 self.current += leftover
 
-            # Add the indices of the bias
-            self.chosen_param_list[
-                self.current : self.current + num_required_indices
-            ] = (
-                index_list[:num_required_indices].detach().cpu().numpy()
-                + start_index
-                + len(module.weight.flatten())
-            )
-            self.current += num_required_indices
-
-        #     if isinstance(module, nn.Linear):
-        #         # Compute the allotted number of neurons for each rows
-        #         num_weights_per_index = module.weight.size(1)
-        #         required_rows = quota // num_weights_per_index + 1
-        #
-        #         batch_mean = torch.mean(torch.abs(grad_output[0]), dim=0)
-        #         index_list = torch.sort(batch_mean, descending=True)[1][:required_rows]
-        #
-        #         # Save the indices of the weights with the highest activations
-        #         for index in index_list[:-1]:
-        #             self.chosen_param_list[
-        #                 self.current : self.current + num_weights_per_index
-        #             ] = (
-        #                 np.arange(num_weights_per_index)
-        #                 + start_index
-        #                 + num_weights_per_index * index.item()
-        #             )
-        #             self.current += num_weights_per_index
-        #
-        #         # Last index processing
-        #         index = index_list[-1]
-        #         # quota may not be divisible by num_weights_per_index
-        #         num_remaning_indices = quota - num_weights_per_index * (
-        #             required_rows - 1
-        #         )
-        #         weight = module.weight[index]
-        #         _, indices = torch.sort(torch.abs(weight), descending=True)
-        #         # Add the start position of the module when network is flattened.
-        #         indices = (
-        #             indices.detach().cpu().numpy()
-        #             + start_index  # start of the module
-        #             + num_weights_per_index * index.item()  # start of the index
-        #         )
-        #
-        #         self.chosen_param_list[
-        #             self.current : self.current + num_remaning_indices
-        #         ] = indices[:num_remaning_indices]
-        #         self.current += num_remaning_indices
-        #
-        #     elif isinstance(module, nn.Conv2d):
-        #         num_weights_per_kernel = (
-        #             module.weight.size(1)
-        #             * module.weight.size(2)
-        #             * module.weight.size(3)
-        #         )  # in_channels (1) * kernel_height (2) * kernel_width (3)
-        #         required_kernels = quota // num_weights_per_kernel + 1
-        #
-        #         batch_mean = torch.mean(
-        #             torch.abs(grad_output[0]), (0, 2, 3)
-        #         )  # Mean batch (0), height (2), width (3)
-        #         index_list = torch.sort(batch_mean, descending=True)[1][
-        #             :required_kernels
-        #         ]
-        #
-        #         # Save the indices of the weights with the highest activations
-        #         for index in index_list[:-1]:
-        #             self.chosen_param_list[
-        #                 self.current : self.current + num_weights_per_kernel
-        #             ] = (
-        #                 np.arange(num_weights_per_kernel)
-        #                 + start_index
-        #                 + num_weights_per_kernel * index.item()
-        #             )
-        #             self.current += num_weights_per_kernel
-        #
-        #         # Get the indices of the weights corresponding to the neurons
-        #         index = index_list[-1]
-        #         weight = module.weight[index].flatten()
-        #         _, indices = torch.sort(torch.abs(weight), descending=True)
-        #         # Add the start position of the module when network is flattened.
-        #         indices = (
-        #             indices.detach().cpu().numpy()
-        #             + start_index  # start of the module
-        #             + num_weights_per_kernel * index.item()  # start of the index
-        #         )
-        #
-        #         num_remaining_indices = quota - num_weights_per_kernel * (
-        #             required_kernels - 1
-        #         )
-        #         self.chosen_param_list[
-        #             self.current : self.current + num_remaining_indices
-        #         ] = indices[:num_remaining_indices]
-        #         self.current += num_remaining_indices
-        #
-        # return hook
+            if module.bias is not None:
+                # Add the indices of the bias
+                self.chosen_param_list[
+                    self.current : self.current + num_required_indices
+                ] = (
+                    index_list[:num_required_indices].detach().cpu().numpy()
+                    + start_index
+                    + len(module.weight.flatten())
+                )
+                self.current += num_required_indices
 
         return hook
 
     def register_hooks(self):
         start_index = 0
         for module in self.net.modules():
+            if not self._is_single_layer(module):
+                continue
+
+            num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_full_backward_hook(hook_fn)
-                start_index += sum(p.numel() for p in module.parameters())
                 self.hooks.append(hook_handle)
-            elif (
-                isinstance(module, nn.BatchNorm1d)
-                or isinstance(module, nn.BatchNorm2d)
-                or isinstance(module, nn.BatchNorm3d)
-            ):
-                start_index += sum(
-                    p.numel() for p in module.parameters() if p.requires_grad
-                )
+
+            start_index += num_param
         return self.hooks
 
     def remove_hooks(self):
@@ -198,6 +115,18 @@ class TopNGradients(Selection):
     def initialize_neurons(self):
         self.chosen_param_list = np.zeros(self.num_choices, dtype="int32")
         self.current = 0
+
+    def _compute_num_param(self):
+        num_param = 0
+        for module in self.net.modules():
+            if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+                num_param += sum(
+                    p.numel() for p in module.parameters() if p.requires_grad
+                )
+        return num_param
+
+    def _is_single_layer(self, module):
+        return list(module.children()) == []
 
     def get_parameters(self):
         return self.chosen_param_list

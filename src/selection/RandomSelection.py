@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn as nn
 
 from .abstract_selection import Selection
 
@@ -10,5 +11,24 @@ class RandomSelection(Selection):
         self.num_choices = num_choices
 
     def get_parameters(self):
-        num_param = sum(p.numel() for p in self.net.parameters())
-        return np.random.choice(num_param, self.num_choices, replace=False)
+        param_index = self._get_index_list()
+        return np.random.choice(param_index, self.num_choices, replace=False)
+
+    def _get_index_list(self):
+        index_list = np.array([])
+        start_index = 0
+        for module in self.net.modules():
+            if not self._is_single_layer(module):
+                continue
+
+            num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+                module_index_list = np.arange(num_param) + start_index
+                index_list = np.append(index_list, module_index_list)
+
+            start_index += num_param
+
+        return index_list
+
+    def _is_single_layer(self, module):
+        return list(module.children()) == []
