@@ -10,7 +10,7 @@ class Threshold(Selection):
         # super(Threshold, self).__init__()
         self.hooks = []
         self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(num_choices, dtype="int32")
         self.current = 0
         self.threshold = threshold
 
@@ -79,8 +79,18 @@ class Threshold(Selection):
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_forward_hook(hook_fn)
-                start_index += sum(p.numel() for p in module.parameters())
+                start_index += sum(
+                    p.numel() for p in module.parameters() if p.requires_grad
+                )
                 self.hooks.append(hook_handle)
+            elif (
+                isinstance(module, nn.BatchNorm1d)
+                or isinstance(module, nn.BatchNorm2d)
+                or isinstance(module, nn.BatchNorm3d)
+            ):
+                start_index += sum(
+                    p.numel() for p in module.parameters() if p.requires_grad
+                )
         return self.hooks
 
     def remove_hooks(self):
@@ -88,7 +98,7 @@ class Threshold(Selection):
             hook.remove()
 
     def initialize_neurons(self):
-        self.chosen_param_list = np.zeros(self.num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(self.num_choices, dtype="int32")
         self.current = 0
 
     def get_parameters(self):

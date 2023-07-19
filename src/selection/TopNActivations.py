@@ -10,7 +10,7 @@ class TopNActivations(Selection):
         super(TopNActivations, self).__init__()
         self.hooks = []
         self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(num_choices, dtype="int32")
         self.current = 0
 
         self.net = net
@@ -54,14 +54,6 @@ class TopNActivations(Selection):
                 )
                 self.current += num_weights_per_output
 
-                # print(
-                #     "1",
-                #     start_index,
-                #     np.arange(num_weights_per_output)
-                #     + start_index
-                #     + num_weights_per_output * index.item(),
-                #     index.detach().cpu().numpy(),
-                # )
             # Add the indices of weights for the leftover neurons
             if leftover != 0:
                 index = index_list[num_required_indices]
@@ -77,13 +69,6 @@ class TopNActivations(Selection):
                     self.current : self.current + leftover
                 ] = indices[:leftover]
                 self.current += leftover
-                # print(
-                #     "2",
-                #     indices[:leftover],
-                #     start_index  # start of the module
-                #     + num_weights_per_output * len(index_list),
-                #     index,
-                # )
 
             # Add the indices of the bias
             self.chosen_param_list[
@@ -94,12 +79,6 @@ class TopNActivations(Selection):
                 + len(module.weight.flatten())
             )
             self.current += num_required_indices
-            # print(
-            #     "3",
-            #     index_list[:num_required_indices].detach().cpu().numpy()
-            #     + start_index
-            #     + len(module.weight.flatten()),
-            # )
 
         return hook
 
@@ -113,6 +92,14 @@ class TopNActivations(Selection):
                     p.numel() for p in module.parameters() if p.requires_grad
                 )
                 self.hooks.append(hook_handle)
+            elif (
+                isinstance(module, nn.BatchNorm1d)
+                or isinstance(module, nn.BatchNorm2d)
+                or isinstance(module, nn.BatchNorm3d)
+            ):
+                start_index += sum(
+                    p.numel() for p in module.parameters() if p.requires_grad
+                )
         return self.hooks
 
     def remove_hooks(self):
@@ -120,7 +107,7 @@ class TopNActivations(Selection):
             hook.remove()
 
     def initialize_neurons(self):
-        self.chosen_param_list = np.zeros(self.num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(self.num_choices, dtype="int32")
         self.current = 0
 
     def get_parameters(self):

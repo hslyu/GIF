@@ -9,7 +9,7 @@ class TopNGradients(Selection):
     def __init__(self, net, num_choices):
         self.hooks = []
         self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(num_choices, dtype="int32")
         self.current = 0
         self.require_backward = True
 
@@ -181,6 +181,14 @@ class TopNGradients(Selection):
                 hook_handle = module.register_full_backward_hook(hook_fn)
                 start_index += sum(p.numel() for p in module.parameters())
                 self.hooks.append(hook_handle)
+            elif (
+                isinstance(module, nn.BatchNorm1d)
+                or isinstance(module, nn.BatchNorm2d)
+                or isinstance(module, nn.BatchNorm3d)
+            ):
+                start_index += sum(
+                    p.numel() for p in module.parameters() if p.requires_grad
+                )
         return self.hooks
 
     def remove_hooks(self):
@@ -188,7 +196,7 @@ class TopNGradients(Selection):
             hook.remove()
 
     def initialize_neurons(self):
-        self.chosen_param_list = np.zeros(self.num_choices, dtype="int16")
+        self.chosen_param_list = np.zeros(self.num_choices, dtype="int32")
         self.current = 0
 
     def get_parameters(self):
