@@ -93,9 +93,7 @@ def main():
     if device == "cuda":
         cudnn.benchmark = True
 
-    net_path = (
-        f"/home/hslyu/research/PIF/checkpoints/Figure_3/{net.__class__.__name__}/cross_entropy/ckpt_0.0.pth",
-    )
+    net_path = f"/home/hslyu/research/PIF/checkpoints/Figure_3/{net.__class__.__name__}/cross_entropy/ckpt_0.0.pth"
     net = load_net(net, net_path)
 
     # For just doing some exps
@@ -126,7 +124,7 @@ def main():
 
     print("==> Registering hooks..")
     # Make hooks
-    percentage = 1
+    percentage = 0.3
     # net_parser = selection.TopNActivations(net, int(num_param * percentage))
     # net_parser = selection.TopNGradients(net, int(num_param * percentage))
     # net_parser = selection.RandomSelection(net, int(num_param * percentage))
@@ -182,19 +180,6 @@ def main():
     newton_loss = total_loss * data_ratio - target_loss * (1 - data_ratio)
 
     index_list = net_parser.get_parameters()
-    # error = []
-    # for i in range(num_param):
-    #     if i not in index_list:
-    #         error.append(i)
-    # for i in index_list:
-    #     count = 0
-    #     for j in index_list:
-    #         if i == j:
-    #             count += 1
-    #     if count >= 2:
-    #         print(i)
-    # print(len(index_list))
-    # print(len(error), num_param - int(num_param * percentage))
     influence = hessians.partial_influence(
         index_list, target_loss, newton_loss, net, tol=1e-4
     )

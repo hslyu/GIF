@@ -36,7 +36,6 @@ def save_net(net, path):
 
 
 def forward(net, dataloader, criterion, num_batch_sample: int = -1):
-    net.train()
     net_loss = 0
     num_batch_sample = len(dataloader) if num_batch_sample == -1 else num_batch_sample
     sample_indices = np.random.choice(
@@ -54,37 +53,38 @@ def forward(net, dataloader, criterion, num_batch_sample: int = -1):
 
 
 def test(net, dataloader, criterion, label, include):
-    net_loss = 0
-    correct = 0
-    total = 0
-    for _, (inputs, targets) in enumerate(dataloader):
-        if include:
-            idx = targets == label
-        else:
-            idx = targets != label
-        inputs = inputs[idx]
-        targets = targets[idx]
-        inputs, targets = inputs.to(device), targets.to(device)
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-        net_loss += loss
+    with torch.no_grad():
+        net_loss = 0
+        correct = 0
+        total = 0
+        for _, (inputs, targets) in enumerate(dataloader):
+            if include:
+                idx = targets == label
+            else:
+                idx = targets != label
+            inputs = inputs[idx]
+            targets = targets[idx]
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = net(inputs)
+            loss = criterion(outputs, targets)
+            net_loss += loss
 
-        total += targets.size(0)
-        _, predicted = outputs.max(1)
-        correct += predicted.eq(targets).sum().item()
+            total += targets.size(0)
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(targets).sum().item()
 
-    accuracy = correct / total * 100
-    net_loss /= len(dataloader)
-    return net_loss, accuracy
+        accuracy = correct / total * 100
+        net_loss /= len(dataloader)
+        return net_loss, accuracy
 
 
 def main():
     torch.manual_seed(0)
-    net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
-    flatten = True
+    # net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
+    # flatten = True
 
-    # net = ResNet18().to(device)
-    # flatten = False
+    net = ResNet18(1).to(device)
+    flatten = False
 
     if device == "cuda":
         cudnn.benchmark = True
@@ -116,11 +116,11 @@ def main():
     train_loader, val_loader, test_loader = data_loader.get_data_loaders()
 
     print("==> Computing total loss..")
-    total_loss = forward(net, train_loader, criterion, 10)
+    total_loss = forward(net, train_loader, criterion, 1)
 
     print("==> Registering hooks..")
     # Make hooks
-    percentage = 0.2
+    percentage = 0.1
     net_parser = selection.TopNActivations(net, int(num_param * percentage))
     # net_parser = selection.TopNGradients(net, int(num_param * percentage))
     # net_parser = selection.RandomSelection(net, int(num_param * percentage))
@@ -139,7 +139,7 @@ def main():
         target.append(target_raw)
     data = torch.cat(data)
     target = torch.cat(target)
-    sample_idx = np.random.choice(len(data), batch_size, replace=False)
+    sample_idx = np.random.choice(len(data), 50, replace=False)
     sample_data = data[sample_idx]
     sample_target = target[sample_idx]
 
@@ -153,26 +153,36 @@ def main():
     newton_loss = total_loss * data_ratio - target_loss * (1 - data_ratio)
 
     index_list = net_parser.get_parameters()
+    # count = 0
+    # for index in index_list:
+    #     count += 1
+    #     if index < 0:
+    #         print(index, count)
+    # exit()
     influence = hessians.partial_influence(
-        index_list, target_loss, newton_loss, net, tol=8e-6
+        index_list, target_loss, newton_loss, net, tol=1e-4
     )
-    utils.update_network(net, influence * 10, index_list)
+    utils.update_network(net, influence, index_list)
     net_parser.remove_hooks()
     net_path = (
         f"checkpoints/Figure_3/PIF/{net_name}/{net_parser.__class__.__name__}.pth"
     )
     save_net(net, net_path)
 
+    net = ResNet18(1).to(device)
     net = load_net(net, net_path)
 
     loss, acc = test(net, test_loader, criterion, 11, False)
-    self_loss, self_acc = test(net, test_loader, criterion, 8, True)
-    exclusive_loss, exclusive_acc = test(net, test_loader, criterion, 8, False)
     print(f"{net_parser.__class__.__name__} original - {loss:.4f}, {acc:.2f}%")
+    del loss, acc
+    self_loss, self_acc = test(net, test_loader, criterion, 8, True)
+    print(f"{net_parser.__class__.__name__} - Self: {self_loss:.4f} {self_acc:.2f}%")
+    del self_loss, self_acc
+    exclusive_loss, exclusive_acc = test(net, test_loader, criterion, 8, False)
     print(
-        f"{net_parser.__class__.__name__} - Self: {self_loss:.4f} {self_acc:.2f}% | exclusive loss: {exclusive_loss:.4f}, {exclusive_acc:.2f}%"
+        f"{net_parser.__class__.__name__} exclusive loss: {exclusive_loss:.4f}, {exclusive_acc:.2f}%"
     )
-    print("")
+    del exclusive_loss, exclusive_acc
 
 
 if __name__ == "__main__":
