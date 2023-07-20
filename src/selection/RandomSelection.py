@@ -12,7 +12,9 @@ class RandomSelection(Selection):
 
     def get_parameters(self):
         param_index = self._get_index_list()
-        return np.random.choice(param_index, self.num_choices, replace=False)
+        return np.random.choice(param_index, self.num_choices, replace=False).astype(
+            int
+        )
 
     def _get_index_list(self):
         index_list = np.array([])
@@ -23,7 +25,7 @@ class RandomSelection(Selection):
 
             num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
-                module_index_list = np.arange(num_param) + start_index
+                module_index_list = np.arange(num_param, dtype=int) + start_index
                 index_list = np.append(index_list, module_index_list)
 
             start_index += num_param

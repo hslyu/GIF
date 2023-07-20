@@ -10,7 +10,7 @@ class Threshold(Selection):
         # super(Threshold, self).__init__()
         self.hooks = []
         self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype="int32")
+        self.chosen_param_list = np.zeros(num_choices, dtype=int)
         self.current = 0
         self.threshold = threshold
 
@@ -103,7 +103,7 @@ class Threshold(Selection):
             hook.remove()
 
     def initialize_neurons(self):
-        self.chosen_param_list = np.zeros(self.num_choices, dtype="int32")
+        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
         self.current = 0
 
     def _is_single_layer(self, module):
