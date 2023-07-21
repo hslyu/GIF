@@ -6,16 +6,16 @@ from .abstract_selection import Selection
 
 
 class TopNActivations(Selection):
-    def __init__(self, net, num_choices):
+    def __init__(self, net, ratio):
         super(TopNActivations, self).__init__()
-        self.hooks = []
-        self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype=int)
-        self.current = 0
-
         self.net = net
         self.num_params = self._compute_num_param()
+        self.num_choices = int(self.num_params * ratio)
         self.last_module = list(net.modules())[-1]
+
+        self.hooks = []
+        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
+        self.current = 0
 
     def generate_hook(self, start_index):
         def hook(module, input, output):

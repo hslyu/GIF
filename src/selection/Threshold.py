@@ -6,17 +6,17 @@ from .abstract_selection import Selection
 
 
 class Threshold(Selection):
-    def __init__(self, net, num_choices, threshold=1.0):
-        # super(Threshold, self).__init__()
-        self.hooks = []
-        self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype=int)
-        self.current = 0
-        self.threshold = threshold
-
+    def __init__(self, net, ratio, threshold=1.0):
+        super(Threshold, self).__init__()
         self.net = net
         self.num_params = self._compute_num_param()
         self.last_module = list(net.modules())[-1]
+
+        self.hooks = []
+        self.num_choices = int(self.num_params * ratio)
+        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
+        self.current = 0
+        self.threshold = threshold
 
     def generate_hook(self, start_index):
         def hook(module, input, output):

@@ -120,8 +120,8 @@ def main():
 
     print("==> Registering hooks..")
     # Make hooks
-    percentage = 0.1
-    net_parser = selection.TopNActivations(net, int(num_param * percentage))
+    percentage = 1
+    net_parser = selection.TopNActivations(net, percentage)
     # net_parser = selection.TopNGradients(net, int(num_param * percentage))
     # net_parser = selection.RandomSelection(net, int(num_param * percentage))
     # net_parser = selection.Threshold(net, int(num_param * percentage), 1)

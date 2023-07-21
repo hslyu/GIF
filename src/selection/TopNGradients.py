@@ -6,20 +6,19 @@ from .abstract_selection import Selection
 
 
 class TopNGradients(Selection):
-    def __init__(self, net, num_choices):
-        self.hooks = []
-        self.num_choices = num_choices
-        self.chosen_param_list = np.zeros(num_choices, dtype=int)
-        self.current = 0
-        self.require_backward = True
-
-        self.sum = 0
+    def __init__(self, net, ratio):
         self.net = net
         self.num_params = self._compute_num_param()
         for module in net.modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 self.first_module = module
                 break
+        self.num_choices = int(self.num_params * ratio)
+
+        self.hooks = []
+        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
+        self.current = 0
+        self.require_backward = True
 
     def generate_hook(self, start_index):
         def hook(module, grad_input, grad_output):
