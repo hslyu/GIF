@@ -36,6 +36,10 @@ class RandomSelection(Selection):
     def _is_single_layer(self, module):
         return list(module.children()) == []
 
+    def set_ratio(self, ratio):
+        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
+        self.num_choices = int(self.num_params * ratio)
+
     def _compute_num_param(self):
         num_param = 0
         for module in self.net.modules():

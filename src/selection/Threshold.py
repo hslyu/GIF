@@ -118,5 +118,9 @@ class Threshold(Selection):
                 )
         return num_param
 
+    def set_ratio(self, ratio):
+        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
+        self.num_choices = int(self.num_params * ratio)
+
     def get_parameters(self):
         return self.chosen_param_list
