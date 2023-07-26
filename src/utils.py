@@ -112,26 +112,26 @@ def progress_bar(current, total, msg=None):
 
 
 def update_network(net, change_list, index_list):
-    # Get modules to be updated and their last index as lists
-    stacked_num_param_list = []
-    param_list = []
-    stacked_num_param = 0
-    for module in net.modules():
-        if list(module.children()) != []:
-            continue
-
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
-            for p in module.parameters():
-                if p.requires_grad:
-                    stacked_num_param += p.numel()
-                    stacked_num_param_list.append(stacked_num_param)
-                    param_list.append(p.flatten())
-        else:
-            for p in module.parameters():
-                if p.requires_grad:
-                    stacked_num_param += p.numel()
-
     with torch.no_grad():
+        # Get modules to be updated and their last index as lists
+        stacked_num_param_list = []
+        param_list = []
+        stacked_num_param = 0
+        for module in net.modules():
+            if list(module.children()) != []:
+                continue
+
+            if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+                for p in module.parameters():
+                    if p.requires_grad:
+                        stacked_num_param += p.numel()
+                        stacked_num_param_list.append(stacked_num_param)
+                        param_list.append(p.flatten())
+            else:
+                for p in module.parameters():
+                    if p.requires_grad:
+                        stacked_num_param += p.numel()
+
         for change, index in zip(change_list, index_list):
             for param, stacked_num_param in zip(param_list, stacked_num_param_list):
                 if index < stacked_num_param:
