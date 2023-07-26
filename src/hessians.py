@@ -6,6 +6,7 @@
 
 import time
 
+import numpy as np
 import torch
 
 
@@ -125,12 +126,14 @@ def influence(
 
 
 def partial_influence(
-    index_list: list,
+    index_list: np.ndarray,
     target_loss: torch.Tensor,
     total_loss: torch.Tensor,
     model: torch.nn.Module,
     tol: float = 1e-4,
     step: float = 0.5,
+    verbose: bool = False,
+    normalizer: float = 1,
 ) -> torch.Tensor:
     """
     Compute partial influence function of a given loss
@@ -149,7 +152,7 @@ def partial_influence(
         torch.Tensor: Partial influence function
     """
 
-    normalizer = 1
+    normalizer = normalizer
     while True:
         v = hvp(
             total_loss / normalizer,
@@ -161,17 +164,18 @@ def partial_influence(
             print("")
             return PIF
         else:
-            # print(
-            #     f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
-            #     + " " * 30,
-            #     end="\r",
-            #     flush=True,
-            # )
+            if verbose:
+                print(
+                    f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
+                    + " " * 30,
+                    end="\r",
+                    flush=True,
+                )
             normalizer += step
 
 
 def iphvp(
-    index_list: list,
+    index_list: np.ndarray,
     loss: torch.Tensor,
     model: torch.nn.Module,
     v: torch.Tensor,
