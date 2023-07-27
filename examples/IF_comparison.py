@@ -11,7 +11,7 @@ import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10
-from models import DenseNet121
+from models import VGG11
 from src import freeze_influence, hessians, selection, utils
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -33,23 +33,6 @@ def save_net(net, path):
         "net": net.state_dict(),
     }
     torch.save(state, path)
-
-
-def forward(net: nn.Module, dataloader, criterion, num_sample_batch: int = -1):
-    net_loss = 0
-    num_sample_batch = len(dataloader) if num_sample_batch == -1 else num_sample_batch
-    sample_indices = np.random.choice(
-        len(dataloader), size=num_sample_batch, replace=False
-    )
-    for batch_idx, (inputs, targets) in enumerate(dataloader):
-        if batch_idx in sample_indices:
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = net(inputs)
-            loss = criterion(outputs, targets)
-            net_loss += loss
-
-    net_loss /= num_sample_batch
-    return net_loss
 
 
 def test(net, dataloader, criterion, label, include):
@@ -112,7 +95,8 @@ def projected_influence(net, index_list, total_loss, target_loss, tol, step):
 def main():
     torch.manual_seed(0)
     np.random.seed(0)
-    net = DenseNet121().to(device)
+    net = VGG11().to(device)
+    flatten = False
     flatten = False
     net_name = net.__class__.__name__
 
@@ -133,10 +117,10 @@ def main():
 
     # Data
     print("==> Preparing data..")
-    batch_size = 128
+    batch_size = 512
     num_workers = 12
-    num_sample_batch = 1
-    num_target_sample = 50
+    num_sample_batch = 4
+    num_target_sample = 1000
 
     data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, flatten=flatten)
     train_loader, val_loader, test_loader = data_loader.get_data_loaders()
@@ -163,7 +147,7 @@ def main():
 
     print("==> Registering hooks..")
     # Make hooks
-    percentage = 0.1
+    percentage = 0.3
     net_parser = selection.TopNActivations(net, percentage)
     # net_parser = selection.TopNGradients(net, int(num_param * percentage))
     # net_parser = selection.RandomSelection(net, int(num_param * percentage))
@@ -197,27 +181,26 @@ def main():
 
     index_list = net_parser.get_parameters()
 
-    tol = 9e-8
+    tol = 1e-8
     influence = hessians.partial_influence(
-        index_list, target_loss, newton_loss, net, tol=tol, step=0.5
+        index_list, target_loss, total_loss, net, tol=tol, step=5
     )
 
     # influence, index_list = projected_influence(
-    #     net, index_list, newton_loss, target_loss, tol=tol, step=0.5
+    #     net, index_list, total_loss, target_loss, tol=tol, step=5
     # )
 
     # influence = freeze_influence.freeze_influence(
-    #     index_list, target_loss, newton_loss, net, tol=tol, step=3
+    #     index_list, target_loss, total_loss, net, tol=tol, step=5
     # )
 
-    utils.update_network(net, influence, index_list)
+    utils.update_network(net, influence * 140, index_list)
     net_parser.remove_hooks()
     save_path = (
         f"checkpoints/Figure_3/PIF/{net_name}/{net_parser.__class__.__name__}.pth"
     )
     save_net(net, save_path)
 
-    net = ResNet18(1).to(device)
     net = load_net(net, save_path)
 
     # loss, acc = test(net, test_loader, criterion, 11, False)
