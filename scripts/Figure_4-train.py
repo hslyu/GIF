@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10, mnist
-from models import DenseNet121
+from models import VGG11, ResNet18
 from src import regularization, utils
 
 # from src import hessians
@@ -21,15 +21,15 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 @dataclass
 class Config:
     lr: float = 0.1
-    num_epoch: int = 200
+    num_epoch: int = 500
     alpha: float = 0.0
-    # network: str = "ResNet18"
-    network: str = "DenseNet"
+    # network: str = "ResNet"
+    network: str = "VGG11"
     data: str = "CIFAR10"
     criterion: str = "cross_entropy"
     resume: bool = False
     path: str = "Figure_4"
-    early_stop: int = 30
+    early_stop: int = 500
     manual_seed: int = 0
 
 
@@ -142,8 +142,12 @@ def main():
 
     # Network configuration
     print("==> Building Model..")
-    net = DenseNet121().to(device)
-    flatten = False
+    if configs.network == "VGG11":
+        net = VGG11().to(device)
+        flatten = False
+    elif configs.network == "ResNet":
+        net = ResNet18().to(device)
+        flatten = False
     net_name = net.__class__.__name__
     print(
         f"==> Building {net_name} finished. "
