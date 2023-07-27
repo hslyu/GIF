@@ -84,6 +84,10 @@ def VGG16():
     return VGG("VGG16")
 
 
+def VGG11():
+    return VGG("VGG11")
+
+
 def test():
     net = VGG("VGG11")
     x = torch.randn(2, 3, 32, 32)
