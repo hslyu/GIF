@@ -15,11 +15,11 @@ class FullyConnectedNet(nn.Module):
             self.layers.append(nn.Linear(hidden_size, hidden_size))
 
             # Add ReLU activation every two layers
-            if (layer_idx + 1) % 2 == 0:
+            if (layer_idx + 1) % 1 == 0:
                 self.layers.append(nn.ReLU())
 
             # Add dropout layer every five layers
-            if (layer_idx + 1) % 5 == 0:
+            if (layer_idx + 1) % 3 == 0:
                 self.layers.append(nn.Dropout(dropout_prob))
 
         # Add the output layer
