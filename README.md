@@ -1,5 +1,5 @@
-# PIF
-Unlearning via Partial Influence Function.
+# GIF
+Generalized influence functions
 To be updated...
 
 # Experiments in Sec. 2.2
