@@ -3,14 +3,14 @@ import time
 import numpy as np
 import torch
 
-from .hessians import compute_gradient, hvp
+from hessians import compute_gradient, hvp
 
 
 def freeze_influence(
-    index_list: np.ndarray,
-    target_loss: torch.Tensor,
-    total_loss: torch.Tensor,
     model: torch.nn.Module,
+    total_loss: torch.Tensor,
+    target_loss: torch.Tensor,
+    index_list: np.ndarray,
     tol: float = 1e-4,
     step: float = 0.5,
     verbose: bool = False,
@@ -20,12 +20,12 @@ def freeze_influence(
     Compute partial influence function of a given loss
 
     Parameters:
-        index_list: list of indices of the parameters where partial influence is computed.
+        model (torch.nn.Module): Model where gradient and hessian is computed.
+        total_loss (torch.Tensor): loss where hessian is computed.
         target_loss (torch.Tensor): Loss where gradient is computed.
                                     The original influence function takes data points as input,
                                     but this function takes loss for some generalization issues.
-        total_loss (torch.Tensor): loss where hessian is computed.
-        model (torch.nn.Module): Model where gradient and hessian is computed.
+        index_list: list of indices of the parameters where partial influence is computed.
         tol (float): tolerance level for computing inverse hessian-vector product.
         step (float): step size for normalizing the hessian and gradient.
 
@@ -37,18 +37,18 @@ def freeze_influence(
     normalizer = normalizer
     while True:
         zeropad_grad = _zeropadding(
-            compute_gradient(target_loss / normalizer, model), index_list, num_params
+            compute_gradient(model, target_loss / normalizer), index_list, num_params
         )
         v = hvp(
-            total_loss / normalizer,
             model,
+            total_loss / normalizer,
             zeropad_grad,
         )
         v = _zeropadding(v, index_list, num_params)
-        PIF = iphvp(index_list, total_loss / normalizer, model, v, tol)
-        if PIF is not None:
+        FIF = iphvp_FIF(model, total_loss / normalizer, v, index_list, tol)
+        if FIF is not None:
             print("")
-            return PIF
+            return FIF
         else:
             if verbose:
                 print(
@@ -60,11 +60,11 @@ def freeze_influence(
             normalizer += step
 
 
-def iphvp(
-    index_list: np.ndarray,
-    loss: torch.Tensor,
+def iphvp_FIF(
     model: torch.nn.Module,
+    loss: torch.Tensor,
     v: torch.Tensor,
+    index_list: np.ndarray,
     tol: float = 1e-5,
 ):
     """

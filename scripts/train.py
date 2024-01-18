@@ -2,52 +2,21 @@
 # -*- coding: utf-8 -*-
 import argparse
 import os
+from dataclasses import dataclass
+from typing import Optional
 
 import torch
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torch import nn
 
-from dataloader import cifar10, mnist
-from models import FullyConnectedNet, LeNet  # ResNet50, ShuffleNetV2
+from dataloader import cifar10, mnist, svhn
+from models import VGG11, DenseNet121, FullyConnectedNet, ResNet11, ResNet18
 from src import regularization, utils
 
 # from src import hessians
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def get_args():
-    parser = argparse.ArgumentParser(description="PyTorch CIFAR10 Training")
-    parser.add_argument("--path", default=1, type=int, help="experiment number")
-    parser.add_argument("--lr", default=0.1, type=float, help="learning rate")
-    parser.add_argument("--num_epoch", default=50, type=int, help="learning rate")
-    parser.add_argument("--alpha", type=float, help="Regularlization weight")
-    parser.add_argument(
-        "--network",
-        default="LeNet",
-        choices=["LeNet", "FCN"],
-        type=str,
-        help="Model to be tested",
-    )
-    parser.add_argument(
-        "--data",
-        default="CIFAR10",
-        choices=["CIFAR10", "MNIST"],
-        type=str,
-        help="Dataset to be used",
-    )
-    parser.add_argument(
-        "--criterion",
-        default="cross_entropy",
-        choices=["cross_entropy", "mse"],
-        type=str,
-        help="Loss criterion function",
-    )
-    parser.add_argument(
-        "--resume", "-r", action="store_true", help="resume from checkpoint"
-    )
-    return parser.parse_args()
 
 
 def _correct_fn(predicted: torch.Tensor, targets: torch.Tensor):
@@ -61,12 +30,15 @@ def _correct_fn(predicted: torch.Tensor, targets: torch.Tensor):
 
 
 # Training
-def train(net, dataloader, optimizer, criterion):
+def train(net, dataloader, optimizer, criterion, exclusive_label=None):
     net.train()
     train_loss = 0
     correct = 0
     total = 0
     for batch_idx, (inputs, targets) in enumerate(dataloader):
+        if exclusive_label is not None:
+            idx = targets != exclusive_label
+            inputs, targets = inputs[idx], targets[idx]
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
@@ -88,7 +60,7 @@ def train(net, dataloader, optimizer, criterion):
         )
 
 
-def test(net, net_name, dataloader, criterion, epoch, args):
+def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=None):
     global best_loss
     global count
 
@@ -98,6 +70,9 @@ def test(net, net_name, dataloader, criterion, epoch, args):
     total = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(dataloader):
+            if exclusive_label is not None:
+                idx = targets != exclusive_label
+                inputs, targets = inputs[idx], targets[idx]
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = net(inputs)
             loss = criterion(outputs, targets)
@@ -119,32 +94,34 @@ def test(net, net_name, dataloader, criterion, epoch, args):
                     total,
                 ),
             )
-
+    test_loss = test_loss / len(dataloader)
     if test_loss < best_loss:
-        dir_path = f"checkpoints/Figure_2/{args.path}/{net_name}/{args.criterion}/"
-        file_name = f"ckpt_{args.alpha}.pth"
-        print(f"Saving the model: {test_loss:.2f} < {best_loss:.2f}")
-        print(dir_path + file_name)
+        print(f"Saving the model: {test_loss:.3f} < {best_loss:.3f}")
+        print(
+            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+        )
         state = {
             "net": net.state_dict(),
             "loss": test_loss,
             "epoch": epoch,
-            "alpha": args.alpha,
-            "criterion": args.criterion,
+            "alpha": configs.alpha,
+            "criterion": configs.criterion,
             "count": count,
         }
-        if not os.path.isdir(dir_path):
-            os.makedirs(dir_path)
+        if not os.path.isdir(
+            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}"
+        ):
+            os.makedirs(f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/")
         torch.save(
             state,
-            dir_path + file_name,
+            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth",
         )
         best_loss = test_loss
         count = 0
     else:
         count += 1
 
-    if count >= 5:
+    if count >= configs.early_stop:
         print("Early Stopping")
         return True
 
@@ -152,21 +129,18 @@ def test(net, net_name, dataloader, criterion, epoch, args):
 
 
 def main():
-    args = get_args()
-    # Manual_seed makes an error only when the args.path is 17,28,81
-    if int(args.path) == 17 or int(args.path) == 28 or int(args.path) == 81:
-        torch.manual_seed(100 + int(args.path))
-    else:
-        torch.manual_seed(int(args.path))
+    configs = Config()
+    torch.manual_seed(0)
 
     # Network configuration
     print("==> Building Model..")
-    if args.network == "LeNet":
-        net = LeNet().to(device)
-        flatten = False
-    else:
-        net = FullyConnectedNet(28 * 28, 8, 10, 3, 0.1).to(device)
+    if configs.network == "FullyConnectedNet":
+        # net = TinyNet().to(device)
+        net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
         flatten = True
+    elif configs.network == "ResNet18":
+        net = ResNet18(1).to(device)
+        flatten = False
     net_name = net.__class__.__name__
     print(
         f"==> Building {net_name} finished. "
@@ -174,7 +148,6 @@ def main():
     )
 
     if device == "cuda":
-        net = torch.nn.DataParallel(net)
         cudnn.benchmark = True
 
     # Load checkpoint.
@@ -182,56 +155,62 @@ def main():
     global best_loss
     global count
 
-    if args.resume:
-        dir_path = f"checkpoints/{args.path}/{net_name}/{args.criterion}/"
-        file_name = f"ckpt_{args.alpha}.pth"
-        assert os.path.isfile(dir_path + file_name), "Error: no checkpoint file found!"
-        checkpoint = torch.load(dir_path + file_name)
+    if configs.resume:
+        assert os.path.isfile(
+            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+        ), "Error: no checkpoint file found!"
+        checkpoint = torch.load(
+            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+        )
         net.load_state_dict(checkpoint["net"])
         best_loss = checkpoint["loss"]
         start_epoch = checkpoint["epoch"]
         count = checkpoint["count"]
         assert (
-            checkpoint["alpha"] == args.alpha
+            checkpoint["alpha"] == configs.alpha
         ), "Error: alpha is not equal to checkpoint value!"
         assert (
-            checkpoint["criterion"] == args.criterion
+            checkpoint["criterion"] == configs.criterion
         ), "Error: loss is not equal to checkpoint value!"
     else:
         best_loss = 1e9
         start_epoch = 0
         count = 0
 
-    if args.criterion == "cross_entropy":
+    if configs.criterion == "cross_entropy":
         criterion = regularization.RegularizedLoss(
-            net, nn.CrossEntropyLoss(), args.alpha
+            net, nn.CrossEntropyLoss(), configs.alpha
         )
         one_hot = False
     else:
-        criterion = regularization.RegularizedLoss(net, nn.MSELoss(), args.alpha)
+        criterion = regularization.RegularizedLoss(net, nn.MSELoss(), configs.alpha)
         one_hot = True
     print(
-        f"==> Current criterion: {criterion.__class__.__name__} with {args.criterion} and alpha={args.alpha}"
+        f"==> Current criterion: {criterion.__class__.__name__} with {configs.criterion} and alpha={configs.alpha}"
     )
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(
+        net.parameters(), lr=configs.lr, momentum=0.9, weight_decay=5e-4
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
     # Data
     print("==> Preparing data..")
-    batch_size = 512
-    num_workers = 4
+    batch_size = configs.batch_size
+    num_workers = 16
 
-    if args.data == "CIFAR10":
+    if configs.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
     else:
         data_loader = mnist.MNISTDataLoader(batch_size, num_workers, one_hot, flatten)
     train_loader, val_loader, test_loader = data_loader.get_data_loaders()
 
-    for epoch in range(start_epoch, start_epoch + args.num_epoch):
+    for epoch in range(start_epoch, start_epoch + configs.num_epoch):
         print("\nEpoch: %d" % epoch)
         train(net, train_loader, optimizer, criterion)
         train(net, val_loader, optimizer, criterion)
-        early_stopping_flag = test(net, net_name, test_loader, criterion, epoch, args)
+        early_stopping_flag = test(
+            net, net_name, test_loader, criterion, epoch, configs
+        )
         scheduler.step()
 
         if early_stopping_flag:

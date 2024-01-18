@@ -16,8 +16,8 @@ def maybe_fp16(vec, fp16):
 
 
 def lanczos(
-    loss: torch.Tensor,
     model: torch.nn.Module,
+    loss: torch.Tensor,
     num_eigenthings: int = 0,
     which: str = "LM",
     max_steps: int = 20,
@@ -84,7 +84,7 @@ def lanczos(
         vec = maybe_fp16(vec, fp16)
         if use_gpu:
             vec = vec.cuda()
-        out = hessians.hvp(loss, model, vec)
+        out = hessians.hvp(model, loss, vec)
         out = maybe_fp16(out, fp16)
         out = out.cpu().numpy()
         return out

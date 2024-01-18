@@ -1,4 +1,4 @@
-name: PIF
+name: GIF
 channels:
   - pytorch
   - nvidia

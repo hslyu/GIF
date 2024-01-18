@@ -111,8 +111,8 @@ def __main__():
     y_pred = model(x_tensor)
     total_loss = criterion(y_pred, y_tensor)
 
-    gradient = hessians.compute_gradient(loss, model)
-    hessian = hessians.compute_hessian(total_loss, model)
+    gradient = hessians.compute_gradient(model, loss)
+    hessian = hessians.compute_hessian(model, total_loss)
 
     print("-----------Inverse hessian vector product accuracy test------------\n")
     # print(torch.linalg.eig((hessian @ hessian)[:2, :2]))
@@ -120,7 +120,7 @@ def __main__():
     # print(f"Approximated HVP:   {hessians.hvp(total_loss, model, gradient)}")
     print(f"Actual IHVP: \t    {torch.inverse(hessian) @ gradient}")
     # print(f"Approximated IHVP:  {hessians.ihvp(total_loss, model, gradient)}")
-    print(f"Influence function: {hessians.influence(loss, total_loss/3, model)/3}")
+    print(f"Influence function: {hessians.influence(model, total_loss/3, loss)/3}")
     # num_params = sum(p.numel() for p in model.parameters())
     # print(
     #     f"Influence function via PIF:  \t    {hessians.partial_influence(list(range(num_params)), loss, total_loss, model)}"
@@ -136,10 +136,10 @@ def __main__():
         @ gradient
     )
     print(f"Approximated PIF for index {index_list}:")
-    print(hessians.partial_influence(index_list, loss, total_loss, model))
+    print(hessians.partial_influence(model, total_loss, loss, index_list))
 
     print("-----------Lanzcos algorithm test------------\n")
-    eigvals = lanczos.lanczos(loss, model, num_lanczos_vectors=100)
+    eigvals = lanczos.lanczos(model, loss, num_lanczos_vectors=100)
     num_lanczos_eigval = sum(p.numel() for p in model.parameters()) - 1
     print(
         f"Negative eigval rate by Lanczos algorithms: {np.sum(eigvals < -1e-3)/num_lanczos_eigval}"

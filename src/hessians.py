@@ -10,12 +10,12 @@ import numpy as np
 import torch
 
 
-def compute_hessian(loss, model) -> torch.Tensor:
+def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
     # # Compute the gradients of the loss w.r.t. the parameters
     # gradients = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     # # Flatten the gradients into a single vector
     # gradients = torch.cat([grad.view(-1) for grad in gradients])
-    gradients = compute_gradient(loss, model, create_graph=True)
+    gradients = compute_gradient(model, loss, create_graph=True)
     # Compute the Hessian matrix
     hessian = torch.zeros(gradients.size()[0], gradients.size()[0])
     for idx in range(gradients.size()[0]):
@@ -33,7 +33,9 @@ def compute_hessian(loss, model) -> torch.Tensor:
     return hessian
 
 
-def compute_gradient(loss, model, create_graph=False) -> torch.Tensor:
+def compute_gradient(
+    model: torch.nn.Module, loss: torch.Tensor, create_graph=False
+) -> torch.Tensor:
     return torch.cat(
         [
             grad.view(-1)
@@ -45,7 +47,7 @@ def compute_gradient(loss, model, create_graph=False) -> torch.Tensor:
 
 
 def ihvp(
-    loss: torch.Tensor, model: torch.nn.Module, v: torch.Tensor, tol: float = 1e-4
+    model: torch.nn.Module, loss: torch.Tensor, v: torch.Tensor, tol: float = 1e-4
 ) -> torch.Tensor:
     """
     A Simple and Efficient Algorithm for Computing the Inverse Hessian-Vector Product.
@@ -64,20 +66,20 @@ def ihvp(
     """
 
     IHVP_old = v
-    IHVP_new = v + IHVP_old - hvp(loss, model, IHVP_old)
+    IHVP_new = v + IHVP_old - hvp(model, loss, IHVP_old)
     while torch.norm(IHVP_new - IHVP_old) > tol:
         IHVP_old = IHVP_new
         # IHVP_new = v + (I - Hessian) @ IHVP_old
         #          = v + IHVP_old - Hessian @ IHVP_old
         #          = v + IHVP_old - hvp(loss, model, IHVP_old)
-        IHVP_new = v + IHVP_old - hvp(loss, model, IHVP_old)
+        IHVP_new = v + IHVP_old - hvp(model, loss, IHVP_old)
 
     return IHVP_new
 
 
 def hvp(
-    loss: torch.Tensor,
     model: torch.nn.Module,
+    loss: torch.Tensor,
     v: torch.Tensor,
     create_graph: bool = True,
 ) -> torch.Tensor:
@@ -106,7 +108,7 @@ def hvp(
 
 
 def influence(
-    loss: torch.Tensor, total_loss: torch.Tensor, model: torch.nn.Module
+    model: torch.nn.Module, total_loss: torch.Tensor, loss: torch.Tensor
 ) -> torch.Tensor:
     """
     Compute influence function of a given loss
@@ -122,14 +124,14 @@ def influence(
         torch.Tensor: Influence function
     """
 
-    return ihvp(total_loss, model, compute_gradient(loss, model))
+    return ihvp(model, total_loss, compute_gradient(model, loss))
 
 
 def partial_influence(
-    index_list: np.ndarray,
-    target_loss: torch.Tensor,
-    total_loss: torch.Tensor,
     model: torch.nn.Module,
+    total_loss: torch.Tensor,
+    target_loss: torch.Tensor,
+    index_list: np.ndarray,
     tol: float = 1e-4,
     step: float = 0.5,
     verbose: bool = False,
@@ -155,11 +157,11 @@ def partial_influence(
     normalizer = normalizer
     while True:
         v = hvp(
-            total_loss / normalizer,
             model,
-            compute_gradient(target_loss / normalizer, model),
+            total_loss / normalizer,
+            compute_gradient(model, target_loss / normalizer),
         )
-        PIF = iphvp(index_list, total_loss / normalizer, model, v[index_list], tol)
+        PIF = iphvp(model, total_loss / normalizer, index_list, v[index_list], tol)
         if PIF is not None:
             print("")
             return PIF
@@ -175,9 +177,9 @@ def partial_influence(
 
 
 def iphvp(
-    index_list: np.ndarray,
-    loss: torch.Tensor,
     model: torch.nn.Module,
+    loss: torch.Tensor,
+    index_list: np.ndarray,
     v: torch.Tensor,
     tol: float = 1e-5,
 ):
@@ -194,13 +196,18 @@ def iphvp(
         np.ndarray: Approximation of the IHVP
     """
 
-    def sHVP(index_list, loss, model, v):
+    def sHVP(
+        model: torch.nn.Module,
+        loss: torch.Tensor,
+        index_list: np.ndarray,
+        v: torch.Tensor,
+    ):
         """
         Subhessian-vector product
         """
         zeropad_v = torch.zeros(num_params, device=v.device)
         zeropad_v[index_list] = v
-        twice_HVP = hvp(loss, model, hvp(loss, model, zeropad_v, True), True)
+        twice_HVP = hvp(model, loss, hvp(model, loss, zeropad_v))
 
         return twice_HVP[index_list]
 
@@ -215,7 +222,7 @@ def iphvp(
     while diff > tol and count < 10000:
         start = time.time()
         IHVP_old = IHVP_new
-        IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
+        IHVP_new = v + IHVP_old - sHVP(model, loss, index_list, IHVP_old)
         diff = torch.norm(IHVP_new - IHVP_old)
         if count % 2 == 0:
             if diff > diff_old:
