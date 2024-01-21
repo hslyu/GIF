@@ -137,6 +137,9 @@ def main():
     elif configs.net_name == "ResNet18":
         net = ResNet18(1).to(device)
         flatten = False
+    elif configs.net_name == "VGG11":
+        net = VGG11().to(device)
+        flatten = False
     else:
         net = None
         print("Error: invalid network name")
@@ -191,7 +194,7 @@ def main():
     optimizer = optim.SGD(
         net.parameters(), lr=configs.lr, momentum=0.9, weight_decay=5e-4
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
     # Data
     print("==> Preparing data..")

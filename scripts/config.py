@@ -13,7 +13,7 @@ class Config:
     num_epoch: int = 200
     alpha: float = 0.0
     resume: bool = False
-    early_stop: int = 30
+    early_stop: int = 50
     batch_size: int = 512
 
 
@@ -27,7 +27,7 @@ def fig3_configs(
     num_epoch: int = 200,
     alpha: float = 0.0,
     resume: bool = False,
-    early_stop: int = 30,
+    early_stop: int = 50,
     batch_size: int = 512,
 ):
     return Config(
@@ -55,7 +55,7 @@ def tab1_configs(
     num_epoch: int = 200,
     alpha: float = 0.0,
     resume: bool = False,
-    early_stop: int = 30,
+    early_stop: int = 50,
     batch_size: int = 512,
     retrained: bool = False,
 ):
@@ -85,7 +85,7 @@ def tab2_configs(
     num_epoch: int = 200,
     alpha: float = 0.0,
     resume: bool = False,
-    early_stop: int = 30,
+    early_stop: int = 50,
     batch_size: int = 512,
     retrained: bool = False,
 ):
