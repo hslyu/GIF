@@ -127,19 +127,21 @@ def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=N
 def main():
     torch.manual_seed(0)
     configs = config.tab2_configs(net_name="ResNet18", data="MNIST")
+    configs = config.tab2_configs(net_name="VGG11", data="CIFAR10")
+    configs = config.tab2_configs(net_name="ShuffleNetV2", data="SVHN")
 
     # Network configuration
     print("==> Building Model..")
+    flatten = False
     if configs.net_name == "FullyConnectedNet":
-        # net = TinyNet().to(device)
         net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
         flatten = True
     elif configs.net_name == "ResNet18":
         net = ResNet18(1).to(device)
-        flatten = False
     elif configs.net_name == "VGG11":
         net = VGG11().to(device)
-        flatten = False
+    elif configs.net_name == "ShuffleNetV2":
+        net = ShuffleNetV2().to(device)
     else:
         net = None
         print("Error: invalid network name")
@@ -205,6 +207,8 @@ def main():
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
     elif configs.data == "MNIST":
         data_loader = mnist.MNISTDataLoader(batch_size, num_workers, one_hot, flatten)
+    elif configs.data == "SVHN":
+        data_loader = svhn.SVHNDataLoader(batch_size, num_workers)
     else:
         print("Error: invalid dataset name")
         return
