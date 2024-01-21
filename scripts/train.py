@@ -127,8 +127,8 @@ def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=N
 def main():
     torch.manual_seed(0)
     configs = config.tab2_configs(net_name="ResNet18", data="MNIST")
-    configs = config.tab2_configs(net_name="VGG11", data="CIFAR10")
     configs = config.tab2_configs(net_name="ShuffleNetV2", data="SVHN")
+    configs = config.tab2_configs(net_name="VGG11", data="CIFAR10")
 
     # Network configuration
     print("==> Building Model..")
@@ -197,6 +197,8 @@ def main():
         net.parameters(), lr=configs.lr, momentum=0.9, weight_decay=5e-4
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+    if configs.net_name == "VGG11":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
     # Data
     print("==> Preparing data..")
