@@ -1,20 +1,16 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
-import argparse
 import os
-from dataclasses import dataclass
-from typing import Optional
 
+import config
 import torch
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10, mnist, svhn
-from models import VGG11, DenseNet121, FullyConnectedNet, ResNet11, ResNet18
+from models import VGG11, FullyConnectedNet, ResNet18, ShuffleNetV2
 from src import regularization, utils
-
-# from src import hessians
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -129,21 +125,25 @@ def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=N
 
 
 def main():
-    configs = Config()
     torch.manual_seed(0)
+    configs = config.tab2_configs(net_name="ResNet18", data="MNIST")
 
     # Network configuration
     print("==> Building Model..")
-    if configs.network == "FullyConnectedNet":
+    if configs.net_name == "FullyConnectedNet":
         # net = TinyNet().to(device)
         net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
         flatten = True
-    elif configs.network == "ResNet18":
+    elif configs.net_name == "ResNet18":
         net = ResNet18(1).to(device)
         flatten = False
-    net_name = net.__class__.__name__
+    else:
+        net = None
+        print("Error: invalid network name")
+        return
+
     print(
-        f"==> Building {net_name} finished. "
+        f"==> Building {configs.net_name} finished. "
         + f"\n    Number of parameters: {sum(p.numel() for p in net.parameters())}"
     )
 
@@ -157,10 +157,10 @@ def main():
 
     if configs.resume:
         assert os.path.isfile(
-            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+            f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
         ), "Error: no checkpoint file found!"
         checkpoint = torch.load(
-            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+            f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
         )
         net.load_state_dict(checkpoint["net"])
         best_loss = checkpoint["loss"]
@@ -200,8 +200,11 @@ def main():
 
     if configs.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
-    else:
+    elif configs.data == "MNIST":
         data_loader = mnist.MNISTDataLoader(batch_size, num_workers, one_hot, flatten)
+    else:
+        print("Error: invalid dataset name")
+        return
     train_loader, val_loader, test_loader = data_loader.get_data_loaders()
 
     for epoch in range(start_epoch, start_epoch + configs.num_epoch):
@@ -209,7 +212,7 @@ def main():
         train(net, train_loader, optimizer, criterion)
         train(net, val_loader, optimizer, criterion)
         early_stopping_flag = test(
-            net, net_name, test_loader, criterion, epoch, configs
+            net, configs.net_name, test_loader, criterion, epoch, configs
         )
         scheduler.step()
 
