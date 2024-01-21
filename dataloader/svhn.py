@@ -3,9 +3,10 @@ from torchvision import datasets, transforms
 
 
 class SVHNDataLoader:
-    def __init__(self, batch_size=512, num_workers=12, one_hot=False, flatten=False):
+    def __init__(self, batch_size=512, num_workers=12, root="data"):
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.root = root
 
     def get_data_loaders(self):
         transform = transforms.Compose(
@@ -16,11 +17,11 @@ class SVHNDataLoader:
         )
 
         train_set = datasets.SVHN(
-            root="./data", split="train", download=True, transform=transform
+            root=self.root, split="train", download=True, transform=transform
         )
 
         test_set = datasets.SVHN(
-            root="./data", split="test", download=True, transform=transform
+            root=self.root, split="test", download=True, transform=transform
         )
 
         train_loader = torch.utils.data.DataLoader(

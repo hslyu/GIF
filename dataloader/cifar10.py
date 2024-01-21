@@ -3,11 +3,14 @@ from torchvision import datasets, transforms
 
 
 class CIFAR10DataLoader:
-    def __init__(self, batch_size=512, num_workers=12, one_hot=False, flatten=False):
+    def __init__(
+        self, batch_size=512, num_workers=12, one_hot=False, flatten=False, root="data"
+    ):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.one_hot = one_hot
         self.flatten = flatten
+        self.root = root
 
     def one_hot_encoder(self, batch):
         images, labels = zip(*batch)
@@ -17,7 +20,7 @@ class CIFAR10DataLoader:
     def get_data_loaders(self):
         # Load the CIFAR-10 dataset
         train_dataset = datasets.CIFAR10(
-            root="data",
+            root=self.root,
             train=True,
             download=True,
             transform=transforms.Compose(
@@ -34,7 +37,7 @@ class CIFAR10DataLoader:
         )
 
         test_dataset = datasets.CIFAR10(
-            root="data",
+            root=self.root,
             train=False,
             download=True,
             transform=transforms.Compose(
