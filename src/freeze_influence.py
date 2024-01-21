@@ -3,7 +3,7 @@ import time
 import numpy as np
 import torch
 
-from hessians import compute_gradient, hvp
+from .hessians import compute_gradient, hvp
 
 
 def freeze_influence(
@@ -13,6 +13,7 @@ def freeze_influence(
     index_list: np.ndarray,
     tol: float = 1e-4,
     step: float = 0.5,
+    max_iter: int = 200,
     verbose: bool = False,
     normalizer: float = 1,
 ) -> torch.Tensor:
@@ -45,9 +46,12 @@ def freeze_influence(
             zeropad_grad,
         )
         v = _zeropadding(v, index_list, num_params)
-        FIF = iphvp_FIF(model, total_loss / normalizer, v, index_list, tol)
+        FIF = iphvp_FIF(
+            model, total_loss / normalizer, v, index_list, tol, max_iter, verbose
+        )
         if FIF is not None:
-            print("")
+            if verbose:
+                print("")
             return FIF
         else:
             if verbose:
@@ -66,6 +70,8 @@ def iphvp_FIF(
     v: torch.Tensor,
     index_list: np.ndarray,
     tol: float = 1e-5,
+    max_iter: int = 200,
+    verbose: bool = False,
 ):
     """
     A Simple and Efficient Algorithm for Computing the Pseudo-inverse of partial Hessian-Vector Product.
@@ -80,12 +86,17 @@ def iphvp_FIF(
         np.ndarray: Approximation of the IHVP
     """
 
-    def sHVP(index_list, loss, model, v):
+    def sHVP(
+        model: torch.nn.Module,
+        loss: torch.Tensor,
+        v: torch.Tensor,
+        index_list: np.ndarray,
+    ):
         """
         Subhessian-vector product
         """
-        first_HVP = _zeropadding(hvp(loss, model, v, True), index_list, num_params)
-        second_HVP = hvp(loss, model, first_HVP, True)
+        first_HVP = _zeropadding(hvp(model, loss, v, True), index_list, num_params)
+        second_HVP = hvp(model, loss, first_HVP, True)
 
         return _zeropadding(second_HVP, index_list, num_params)
 
@@ -96,24 +107,21 @@ def iphvp_FIF(
     diff_old = 1e10
     IHVP_new = v
     count = 0
-    elapsed_time = 0
-    while diff > tol and count < 10000:
-        start = time.time()
+    while diff > tol and count < max_iter:
         IHVP_old = IHVP_new
-        IHVP_new = v + IHVP_old - sHVP(index_list, loss, model, IHVP_old)
+        IHVP_new = v + IHVP_old - sHVP(model, loss, IHVP_old, index_list)
         diff = torch.norm(IHVP_new - IHVP_old)
         if count % 2 == 0:
             if diff > diff_old:
                 return
             diff_old = diff
-        elapsed_time += time.time() - start
         count += 1
-        print(
-            f"Computing partial influence ... [{count}/10000], Tolerance: {diff/ len(index_list) ** 0.5:.3E}, Avg. computing time: {elapsed_time/count:.3f}s"
-            + " " * 10,
-            end="\r",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"Computing partial influence ... [{count}/{max_iter}]",
+                end="\r",
+                flush=True,
+            )
 
     return IHVP_new[index_list]
 

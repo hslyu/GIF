@@ -134,6 +134,7 @@ def partial_influence(
     index_list: np.ndarray,
     tol: float = 1e-4,
     step: float = 0.5,
+    max_iter: int = 200,
     verbose: bool = False,
     normalizer: float = 1,
 ) -> torch.Tensor:
@@ -161,9 +162,18 @@ def partial_influence(
             total_loss / normalizer,
             compute_gradient(model, target_loss / normalizer),
         )
-        PIF = iphvp(model, total_loss / normalizer, index_list, v[index_list], tol)
+        PIF = iphvp(
+            model,
+            total_loss / normalizer,
+            index_list,
+            v[index_list],
+            tol,
+            max_iter,
+            verbose,
+        )
         if PIF is not None:
-            print("")
+            if verbose:
+                print("")
             return PIF
         else:
             if verbose:
@@ -182,6 +192,8 @@ def iphvp(
     index_list: np.ndarray,
     v: torch.Tensor,
     tol: float = 1e-5,
+    max_iter: int = 200,
+    verbose: bool = False,
 ):
     """
     A Simple and Efficient Algorithm for Computing the Pseudo-inverse of partial Hessian-Vector Product.
@@ -199,8 +211,8 @@ def iphvp(
     def sHVP(
         model: torch.nn.Module,
         loss: torch.Tensor,
-        index_list: np.ndarray,
         v: torch.Tensor,
+        index_list: np.ndarray,
     ):
         """
         Subhessian-vector product
@@ -218,23 +230,20 @@ def iphvp(
     diff_old = 1e10
     IHVP_new = v
     count = 0
-    elapsed_time = 0
-    while diff > tol and count < 10000:
-        start = time.time()
+    while diff > tol and count < max_iter:
         IHVP_old = IHVP_new
-        IHVP_new = v + IHVP_old - sHVP(model, loss, index_list, IHVP_old)
+        IHVP_new = v + IHVP_old - sHVP(model, loss, IHVP_old, index_list)
         diff = torch.norm(IHVP_new - IHVP_old)
         if count % 2 == 0:
             if diff > diff_old:
                 return
             diff_old = diff
-        elapsed_time += time.time() - start
         count += 1
-        print(
-            f"Computing partial influence ... [{count}/10000], Tolerance: {diff/ len(index_list) ** 0.5:.3E}, Avg. computing time: {elapsed_time/count:.3f}s"
-            + " " * 10,
-            end="\r",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"Computing generalized influence ... [{count}/{max_iter}]",
+                end="\r",
+                flush=True,
+            )
 
     return IHVP_new
