@@ -176,13 +176,12 @@ def partial_influence(
                 print("")
             return PIF
         else:
-            if verbose:
-                print(
-                    f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
-                    + " " * 30,
-                    end="\r",
-                    flush=True,
-                )
+            # if verbose: print(
+            #         f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
+            #         + " " * 30,
+            #         end="\r",
+            #         flush=True,
+            #     )
             normalizer += step
 
 
