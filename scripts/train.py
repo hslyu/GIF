@@ -132,11 +132,7 @@ def main():
 
     # Network configuration
     print("==> Building Model..")
-    flatten = False
-    if configs.net_name == "FullyConnectedNet":
-        net = FullyConnectedNet(28 * 28, 20, 10, 3, 0.1).to(device)
-        flatten = True
-    elif configs.net_name == "ResNet18":
+    if configs.net_name == "ResNet18":
         net = ResNet18(1).to(device)
     elif configs.net_name == "VGG11":
         net = VGG11().to(device)
@@ -186,10 +182,8 @@ def main():
         criterion = regularization.RegularizedLoss(
             net, nn.CrossEntropyLoss(), configs.alpha
         )
-        one_hot = False
     else:
         criterion = regularization.RegularizedLoss(net, nn.MSELoss(), configs.alpha)
-        one_hot = True
     print(
         f"==> Current criterion: {criterion.__class__.__name__} with {configs.criterion} and alpha={configs.alpha}"
     )
@@ -206,9 +200,9 @@ def main():
     num_workers = 16
 
     if configs.data == "CIFAR10":
-        data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers, one_hot)
+        data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers)
     elif configs.data == "MNIST":
-        data_loader = mnist.MNISTDataLoader(batch_size, num_workers, one_hot, flatten)
+        data_loader = mnist.MNISTDataLoader(batch_size, num_workers)
     elif configs.data == "SVHN":
         data_loader = svhn.SVHNDataLoader(batch_size, num_workers)
     else:
