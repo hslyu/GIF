@@ -2,29 +2,27 @@ import numpy as np
 import torch
 from torch import nn
 
-from .abstract_selection import Selection
+from .abstract_selection import Selection, _ModuleInfo
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class TopNActivations(Selection):
     def __init__(self, net, ratio):
+        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
         super(TopNActivations, self).__init__()
         self.net = net
-        self.num_params = self._compute_num_param()
-        self.num_choices = int(self.num_params * ratio)
-        self.last_module = list(net.modules())[-1]
-
+        self.ratio = ratio
         self.hooks = []
-        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
-        self.current = 0
+        self.module_info_list = []
 
     def generate_hook(self, start_index):
         def hook(module, input, output):
             # Determine the number of neurons to be chosen
             module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
-            if module is self.last_module:
-                quota = int(self.num_choices - self.current)
-            else:
-                quota = int(module_size * self.num_choices / self.num_params)
+            num_params = int(module_size * self.ratio)
+            module_info = _ModuleInfo(module, start_index, num_params)
+            selected_index_list = np.empty(0, dtype=int)
 
             if isinstance(module, nn.Linear):
                 # Compute the allotted number of neurons for each rows
@@ -41,49 +39,49 @@ class TopNActivations(Selection):
                 batch_abs_mean = torch.abs(torch.mean(output, (0, 2, 3)))
 
             if module.bias is not None:
-                num_required_indices = quota // (num_weights_per_output + 1)
-                leftover = quota % (num_weights_per_output + 1)
+                num_required_indices = num_params // (num_weights_per_output + 1)
+                leftover = num_params % (num_weights_per_output + 1)
             else:
-                num_required_indices = quota // (num_weights_per_output)
-                leftover = quota % (num_weights_per_output)
+                num_required_indices = num_params // (num_weights_per_output)
+                leftover = num_params % (num_weights_per_output)
             index_list = torch.sort(batch_abs_mean, descending=True)[1]
             # Add the indices of weights
             for index in index_list[:num_required_indices]:
-                self.chosen_param_list[
-                    self.current : self.current + num_weights_per_output
-                ] = (
-                    np.arange(num_weights_per_output)
-                    + start_index
-                    + num_weights_per_output * index.item()
+                selected_index_list = np.concatenate(
+                    (
+                        selected_index_list,
+                        np.arange(num_weights_per_output)
+                        + num_weights_per_output * index.item(),
+                    )
                 )
-                self.current += num_weights_per_output
 
             # Add the indices of weights for the leftover neurons
             if leftover != 0:
                 index = index_list[num_required_indices]
-                weight = module.weight[index].flatten()
-                _, indices = torch.sort(torch.abs(weight), descending=True)
-                # Add the start position of the module when network is flattened.
+                # random pick leftover number of neurons
                 indices = (
-                    indices.detach().cpu().numpy()
-                    + start_index  # start of the module
+                    np.random.choice(
+                        np.arange(num_weights_per_output), leftover, replace=False
+                    )
                     + num_weights_per_output * index.item()
                 )
-                self.chosen_param_list[
-                    self.current : self.current + leftover
-                ] = indices[:leftover]
-                self.current += leftover
+                selected_index_list = np.concatenate((selected_index_list, indices))
+
+            module_info.weight_index_list = selected_index_list
 
             if module.bias is not None:
-                # Add the indices of the bias
-                self.chosen_param_list[
-                    self.current : self.current + num_required_indices
-                ] = (
+                module_info.bias_index_list = (
                     index_list[:num_required_indices].detach().cpu().numpy()
-                    + start_index
-                    + len(module.weight.flatten())
                 )
-                self.current += num_required_indices
+                # Add the indices of the bias
+                selected_index_list = np.concatenate(
+                    (
+                        selected_index_list,
+                        module_info.bias_index_list + module.weight.numel(),
+                    )
+                )
+            module_info.index_list = selected_index_list
+            self.module_info_list.append(module_info)
 
         return hook
 
@@ -107,24 +105,41 @@ class TopNActivations(Selection):
             hook.remove()
 
     def initialize_neurons(self):
-        self.chosen_param_list = np.zeros(self.num_choices, dtype=int)
-        self.current = 0
+        return
 
     def _is_single_layer(self, module):
         return list(module.children()) == []
 
-    def _compute_num_param(self):
-        num_param = 0
-        for module in self.net.modules():
-            if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
-                num_param += sum(
-                    p.numel() for p in module.parameters() if p.requires_grad
-                )
-        return num_param
-
-    def set_ratio(self, ratio):
-        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        self.num_choices = int(self.num_params * ratio)
-
     def get_parameters(self):
-        return self.chosen_param_list
+        selected_parameter_indices = np.empty(0, dtype=int)
+        for info in self.module_info_list:
+            selected_parameter_indices = np.concatenate(
+                (selected_parameter_indices, info.index_list + info.start_index)
+            )
+
+        return selected_parameter_indices
+
+    def update_network(self, vectorized_influence):
+        assert sum(info.num_params for info in self.module_info_list) == len(
+            vectorized_influence
+        ), f"length of vectorized_influence {len(vectorized_influence)} is not equal to the number of seleceted parameters {sum(info.num_params for info in self.module_info_list)}"
+
+        with torch.no_grad():
+            current = 0
+            for info in self.module_info_list:
+                module = info.module
+                change_list = vectorized_influence[current : current + info.num_params]
+                current += info.num_params
+
+                weight_change = torch.zeros(module.weight.numel()).to(device)
+                weight_change[info.weight_index_list] = change_list[
+                    : len(info.weight_index_list)
+                ]
+                module.weight.data += weight_change.view_as(module.weight.data)
+
+                if module.bias is not None:
+                    bias_change = torch.zeros(module.bias.numel()).to(device)
+                    bias_change[info.bias_index_list] = change_list[
+                        len(info.weight_index_list) :
+                    ]
+                    module.bias.data += bias_change.view_as(module.bias.data)
