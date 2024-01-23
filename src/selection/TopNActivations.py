@@ -92,6 +92,7 @@ class TopNActivations(Selection):
                 continue
 
             module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
+
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_forward_hook(hook_fn)
