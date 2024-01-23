@@ -4,7 +4,7 @@
 # Author: Hyeonsu Lyu
 # Contact: hslyu4@postech.ac.kr
 
-import time
+import gc
 
 import numpy as np
 import torch
@@ -15,13 +15,13 @@ def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
     # gradients = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     # # Flatten the gradients into a single vector
     # gradients = torch.cat([grad.view(-1) for grad in gradients])
-    gradients = compute_gradient(model, loss, create_graph=True)
+    gradients = compute_gradient(model, loss)
     # Compute the Hessian matrix
     hessian = torch.zeros(gradients.size()[0], gradients.size()[0])
     for idx in range(gradients.size()[0]):
         # Compute the second-order gradients of the loss w.r.t. each parameter
         second_gradients = torch.autograd.grad(
-            gradients[idx], model.parameters(), retain_graph=True
+            gradients[idx], list(model.parameters()), retain_graph=True
         )
         # Flatten the second-order gradients into a single vector
         second_gradients = torch.cat(
@@ -33,14 +33,12 @@ def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
     return hessian
 
 
-def compute_gradient(
-    model: torch.nn.Module, loss: torch.Tensor, create_graph=False
-) -> torch.Tensor:
+def compute_gradient(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
     return torch.cat(
         [
             grad.view(-1)
             for grad in torch.autograd.grad(
-                loss, model.parameters(), create_graph=create_graph, retain_graph=True
+                loss, list(model.parameters()), retain_graph=True
             )
         ]
     )
@@ -127,7 +125,7 @@ def influence(
     return ihvp(model, total_loss, compute_gradient(model, loss))
 
 
-def partial_influence(
+def generalized_influence(
     model: torch.nn.Module,
     total_loss: torch.Tensor,
     target_loss: torch.Tensor,
@@ -139,10 +137,10 @@ def partial_influence(
     normalizer: float = 1,
 ) -> torch.Tensor:
     """
-    Compute partial influence function of a given loss
+    Compute generalized influence function of a given loss
 
     Parameters:
-        index_list: list of indices of the parameters where partial influence is computed.
+        index_list: list of indices of the parameters where generalized influence is computed.
         target_loss (torch.Tensor): Loss where gradient is computed.
                                     The original influence function takes data points as input,
                                     but this function takes loss for some generalization issues.
@@ -152,7 +150,7 @@ def partial_influence(
         step (float): step size for normalizing the hessian and gradient.
 
     Returns:
-        torch.Tensor: Partial influence function
+        torch.Tensor: generalized influence function
     """
 
     normalizer = normalizer
@@ -174,6 +172,9 @@ def partial_influence(
         if PIF is not None:
             if verbose:
                 print("")
+            del v
+            gc.collect()
+            torch.cuda.empty_cache()
             return PIF
         else:
             # if verbose: print(
