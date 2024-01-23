@@ -1,5 +1,5 @@
 from .abstract_selection import Selection
-from .RandomSelection import RandomSelection
+from .Random import Random
 from .Threshold import Threshold
 from .TopNActivations import TopNActivations
 from .TopNGradients import TopNGradients

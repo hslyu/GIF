@@ -13,7 +13,7 @@ class TopNActivations(Selection):
         super(TopNActivations, self).__init__()
         self.net = net
         self.ratio = ratio
-        self.hooks = []
+        self.hook_handle_list = []
         self.module_info_list = []
 
     def generate_hook(self, start_index):
@@ -91,21 +91,18 @@ class TopNActivations(Selection):
             if not self._is_single_layer(module):
                 continue
 
-            num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_forward_hook(hook_fn)
-                self.hooks.append(hook_handle)
+                self.hook_handle_list.append(hook_handle)
 
-            start_index += num_param
-        return self.hooks
+            start_index += module_size
+        return self.hook_handle_list
 
     def remove_hooks(self):
-        for hook in self.hooks:
+        for hook in self.hook_handle_list:
             hook.remove()
-
-    def initialize_neurons(self):
-        return
 
     def _is_single_layer(self, module):
         return list(module.children()) == []
