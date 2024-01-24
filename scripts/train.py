@@ -56,7 +56,7 @@ def train(net, dataloader, optimizer, criterion, exclusive_label=None):
         )
 
 
-def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=None):
+def test(net, dataloader, criterion, epoch, configs, exclusive_label=None):
     global best_loss
     global count
 
@@ -92,10 +92,14 @@ def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=N
             )
     test_loss = test_loss / len(dataloader)
     if test_loss < best_loss:
-        print(f"Saving the model: {test_loss:.3f} < {best_loss:.3f}")
-        print(
-            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+        dirname = f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/"
+        filename = (
+            "ckpt_{configs.alpha}.pth"
+            if configs.exclusive_label is None
+            else f"ckpt_{configs.alpha}_{configs.exclusive_label}.pth"
         )
+        print(f"Saving the model: {test_loss:.3f} < {best_loss:.3f}")
+        print(dirname + filename)
         state = {
             "net": net.state_dict(),
             "loss": test_loss,
@@ -104,13 +108,11 @@ def test(net, net_name, dataloader, criterion, epoch, configs, exclusive_label=N
             "criterion": configs.criterion,
             "count": count,
         }
-        if not os.path.isdir(
-            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}"
-        ):
-            os.makedirs(f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/")
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
         torch.save(
             state,
-            f"checkpoints/{configs.path}/{net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth",
+            dirname + filename,
         )
         best_loss = test_loss
         count = 0
@@ -129,6 +131,9 @@ def main():
     configs = config.tab2_configs(net_name="ResNet18", data="MNIST")
     configs = config.tab2_configs(net_name="ShuffleNetV2", data="SVHN")
     configs = config.tab2_configs(net_name="VGG11", data="CIFAR10")
+    configs = config.tab2_configs(
+        net_name="VGG11", data="CIFAR10", retrained=True, exclusive_label=0
+    )
 
     # Network configuration
     print("==> Building Model..")
@@ -142,6 +147,9 @@ def main():
         net = None
         print("Error: invalid network name")
         return
+
+    if configs.retrained:
+        configs.net_name += "_retrained"
 
     print(
         f"==> Building {configs.net_name} finished. "
@@ -157,11 +165,15 @@ def main():
     global count
 
     if configs.resume:
-        assert os.path.isfile(
-            f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
-        ), "Error: no checkpoint file found!"
+        dirname = f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/"
+        filename = (
+            "ckpt_{configs.alpha}.pth"
+            if configs.exclusive_label is None
+            else f"ckpt_{configs.alpha}_{configs.exclusive_label}.pth"
+        )
+        assert os.path.isfile(dirname + filename), "Error: no checkpoint file found!"
         checkpoint = torch.load(
-            f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/ckpt_{configs.alpha}.pth"
+            dirname + filename,
         )
         net.load_state_dict(checkpoint["net"])
         best_loss = checkpoint["loss"]
@@ -215,7 +227,12 @@ def main():
         train(net, train_loader, optimizer, criterion)
         train(net, val_loader, optimizer, criterion)
         early_stopping_flag = test(
-            net, configs.net_name, test_loader, criterion, epoch, configs
+            net,
+            test_loader,
+            criterion,
+            epoch,
+            configs,
+            exclusive_label=configs.exclusive_label,
         )
         scheduler.step()
 

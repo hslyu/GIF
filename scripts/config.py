@@ -15,6 +15,7 @@ class Config:
     resume: bool = False
     early_stop: int = 50
     batch_size: int = 512
+    retrained: bool = False
 
 
 def fig3_configs(
@@ -29,6 +30,7 @@ def fig3_configs(
     resume: bool = False,
     early_stop: int = 50,
     batch_size: int = 512,
+    retrained: bool = False,
 ):
     return Config(
         net_name,
@@ -42,6 +44,7 @@ def fig3_configs(
         resume,
         early_stop,
         batch_size,
+        retrained,
     )
 
 
@@ -59,7 +62,6 @@ def tab1_configs(
     batch_size: int = 512,
     retrained: bool = False,
 ):
-    net_name = net_name + "_retrained" if retrained else net_name
     return Config(
         net_name,
         data,
@@ -72,6 +74,7 @@ def tab1_configs(
         resume,
         early_stop,
         batch_size,
+        retrained,
     )
 
 
@@ -89,7 +92,6 @@ def tab2_configs(
     batch_size: int = 512,
     retrained: bool = False,
 ):
-    net_name = net_name + "_retrained" if retrained else net_name
     return Config(
         net_name,
         data,
@@ -102,6 +104,7 @@ def tab2_configs(
         resume,
         early_stop,
         batch_size,
+        retrained,
     )
 
 
