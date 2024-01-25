@@ -1,4 +1,4 @@
-import time
+import gc
 
 import numpy as np
 import torch
@@ -52,6 +52,9 @@ def freeze_influence(
         if FIF is not None:
             if verbose:
                 print("")
+            del v
+            gc.collect()
+            torch.cuda.empty_cache()
             return FIF
         else:
             # if verbose:
@@ -95,8 +98,8 @@ def iphvp_FIF(
         """
         Subhessian-vector product
         """
-        first_HVP = _zeropadding(hvp(model, loss, v, True), index_list, num_params)
-        second_HVP = hvp(model, loss, first_HVP, True)
+        first_HVP = _zeropadding(hvp(model, loss, v), index_list, num_params)
+        second_HVP = hvp(model, loss, first_HVP)
 
         return _zeropadding(second_HVP, index_list, num_params)
 
