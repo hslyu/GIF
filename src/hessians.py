@@ -155,27 +155,30 @@ def generalized_influence(
 
     normalizer = normalizer
     while True:
-        v = hvp(
+        I_0 = hvp(
             model,
             total_loss / normalizer,
             compute_gradient(model, target_loss / normalizer),
         )
-        PIF = iphvp(
+        zero_mask = torch.ones(len(I_0), dtype=torch.bool, device=I_0.device)
+        zero_mask[index_list] = False
+        I_0[zero_mask] = 0
+        GIF = iphvp(
             model,
             total_loss / normalizer,
-            v[index_list],
+            I_0,
             index_list,
             tol,
             max_iter,
             verbose,
         )
-        if PIF is not None:
+        if GIF is not None:
             if verbose:
                 print("")
-            del v
+            del I_0
             gc.collect()
             torch.cuda.empty_cache()
-            return PIF
+            return GIF
         else:
             # if verbose: print(
             #         f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
@@ -217,23 +220,24 @@ def iphvp(
         """
         Subhessian-vector product
         """
-        zeropad_v = torch.zeros(num_params, device=v.device)
-        zeropad_v[index_list] = v
-        twice_HVP = hvp(model, loss, hvp(model, loss, zeropad_v))
+        twice_HVP = hvp(model, loss, hvp(model, loss, v))
+        twice_HVP[zero_mask] = 0
 
-        return twice_HVP[index_list]
+        return twice_HVP
 
-    num_params = sum(p.numel() for p in model.parameters())
+    zero_mask = torch.ones(len(v), dtype=torch.bool, device=v.device)
+    zero_mask[index_list] = False
+
     tol = tol * len(index_list) ** 0.5
     # initial settings
     diff = tol + 0.1
     diff_old = 1e10
-    IHVP_new = v
+    I_new = v
     count = 0
     while diff > tol and count < max_iter:
-        IHVP_old = IHVP_new
-        IHVP_new = v + IHVP_old - sHVP(model, loss, IHVP_old, index_list)
-        diff = torch.norm(IHVP_new - IHVP_old)
+        I_old = I_new
+        I_new = v + I_old - sHVP(model, loss, I_old, index_list)
+        diff = torch.norm(I_new - I_old)
         if count % 2 == 0:
             if diff > diff_old:
                 return
@@ -246,4 +250,4 @@ def iphvp(
                 flush=True,
             )
 
-    return IHVP_new
+    return I_new[index_list]

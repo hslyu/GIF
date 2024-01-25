@@ -37,22 +37,24 @@ def freeze_influence(
     num_params = sum(p.numel() for p in model.parameters())
     normalizer = normalizer
     while True:
-        zeropad_grad = _zeropadding(
-            compute_gradient(model, target_loss / normalizer), index_list, num_params
-        )
-        v = hvp(
+        grad = compute_gradient(model, total_loss / normalizer)
+        zero_mask = torch.ones(len(grad), dtype=torch.bool, device=grad.device)
+        zero_mask[index_list] = False
+        grad[zero_mask] = 0
+
+        I_0 = hvp(
             model,
             total_loss / normalizer,
-            zeropad_grad,
+            grad
         )
-        v = _zeropadding(v, index_list, num_params)
+        I_0[zero_mask] = 0
         FIF = iphvp_FIF(
-            model, total_loss / normalizer, v, index_list, tol, max_iter, verbose
+            model, total_loss / normalizer, I_0, index_list, tol, max_iter, verbose
         )
         if FIF is not None:
             if verbose:
                 print("")
-            del v
+            del I_0
             gc.collect()
             torch.cuda.empty_cache()
             return FIF
@@ -98,22 +100,26 @@ def iphvp_FIF(
         """
         Subhessian-vector product
         """
-        first_HVP = _zeropadding(hvp(model, loss, v), index_list, num_params)
+        first_HVP = hvp(model, loss, v)
+        first_HVP[zero_mask] = 0
         second_HVP = hvp(model, loss, first_HVP)
+        second_HVP[zero_mask] = 0
 
-        return _zeropadding(second_HVP, index_list, num_params)
+        return second_HVP
 
-    num_params = sum(p.numel() for p in model.parameters())
+    zero_mask = torch.ones(len(v), dtype=torch.bool, device=v.device)
+    zero_mask[index_list] = False
+
     tol = tol * len(index_list) ** 0.5
     # initial settings
     diff = tol + 0.1
     diff_old = 1e10
-    IHVP_new = v
+    I_new = v
     count = 0
     while diff > tol and count < max_iter:
-        IHVP_old = IHVP_new
-        IHVP_new = v + IHVP_old - sHVP(model, loss, IHVP_old, index_list)
-        diff = torch.norm(IHVP_new - IHVP_old)
+        I_old = I_new
+        I_new = v + I_old - sHVP(model, loss, I_old, index_list)
+        diff = torch.norm(I_new - I_old)
         if count % 2 == 0:
             if diff > diff_old:
                 return
@@ -126,7 +132,7 @@ def iphvp_FIF(
                 flush=True,
             )
 
-    return IHVP_new[index_list]
+    return I_new[index_list]
 
 
 def _zeropadding(v: torch.Tensor, index_list, num_params) -> torch.Tensor:
