@@ -34,18 +34,17 @@ def freeze_influence(
         torch.Tensor: Partial influence function
     """
 
-    num_params = sum(p.numel() for p in model.parameters())
     normalizer = normalizer
     while True:
         zeropad_grad = _zeropadding(
-            compute_gradient(model, target_loss / normalizer), index_list, num_params
+            compute_gradient(model, target_loss / normalizer), index_list
         )
         v = hvp(
             model,
             total_loss / normalizer,
             zeropad_grad,
         )
-        v = _zeropadding(v, index_list, num_params)
+        v = _zeropadding(v, index_list)
         FIF = iphvp_FIF(
             model, total_loss / normalizer, v, index_list, tol, max_iter, verbose
         )
@@ -98,12 +97,11 @@ def iphvp_FIF(
         """
         Subhessian-vector product
         """
-        first_HVP = _zeropadding(hvp(model, loss, v), index_list, num_params)
+        first_HVP = _zeropadding(hvp(model, loss, v), index_list)
         second_HVP = hvp(model, loss, first_HVP)
 
-        return _zeropadding(second_HVP, index_list, num_params)
+        return _zeropadding(second_HVP, index_list)
 
-    num_params = sum(p.numel() for p in model.parameters())
     tol = tol * len(index_list) ** 0.5
     # initial settings
     diff = tol + 0.1
@@ -129,10 +127,11 @@ def iphvp_FIF(
     return IHVP_new[index_list]
 
 
-def _zeropadding(v: torch.Tensor, index_list, num_params) -> torch.Tensor:
+def _zeropadding(v: torch.Tensor, index_list) -> torch.Tensor:
     """
     Padding zeros but for params in index_list
     """
-    zeropad_v = torch.zeros(num_params, device=v.device)
-    zeropad_v[index_list] = v[index_list]
-    return zeropad_v
+    # zeropad_v = torch.zeros(num_params, device=v.device)
+    # zeropad_v[index_list] = v[index_list]
+    v[~index_list] = 0
+    return v
