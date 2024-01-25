@@ -163,8 +163,8 @@ def generalized_influence(
         PIF = iphvp(
             model,
             total_loss / normalizer,
-            index_list,
             v[index_list],
+            index_list,
             tol,
             max_iter,
             verbose,
@@ -189,8 +189,8 @@ def generalized_influence(
 def iphvp(
     model: torch.nn.Module,
     loss: torch.Tensor,
-    index_list: np.ndarray,
     v: torch.Tensor,
+    index_list: np.ndarray,
     tol: float = 1e-5,
     max_iter: int = 200,
     verbose: bool = False,
