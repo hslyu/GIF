@@ -215,7 +215,6 @@ def iphvp(
         model: torch.nn.Module,
         loss: torch.Tensor,
         v: torch.Tensor,
-        index_list: np.ndarray,
     ):
         """
         Subhessian-vector product
@@ -236,7 +235,7 @@ def iphvp(
     count = 0
     while diff > tol and count < max_iter:
         I_old = I_new
-        I_new = v + I_old - sHVP(model, loss, I_old, index_list)
+        I_new = v + I_old - sHVP(model, loss, I_old)
         diff = torch.norm(I_new - I_old)
         if count % 2 == 0:
             if diff > diff_old:
