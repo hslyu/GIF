@@ -34,18 +34,17 @@ def freeze_influence(
         torch.Tensor: Partial influence function
     """
 
-    num_params = sum(p.numel() for p in model.parameters())
     normalizer = normalizer
     while True:
-        grad = compute_gradient(model, total_loss / normalizer)
+        grad = compute_gradient(model, target_loss / normalizer)
         zero_mask = torch.ones(len(grad), dtype=torch.bool, device=grad.device)
         zero_mask[index_list] = False
-        grad[zero_mask] = 0
 
+        grad[zero_mask] = 0
         I_0 = hvp(
             model,
             total_loss / normalizer,
-            grad
+            grad,
         )
         I_0[zero_mask] = 0
         FIF = iphvp_FIF(
@@ -95,7 +94,6 @@ def iphvp_FIF(
         model: torch.nn.Module,
         loss: torch.Tensor,
         v: torch.Tensor,
-        index_list: np.ndarray,
     ):
         """
         Subhessian-vector product
@@ -109,7 +107,6 @@ def iphvp_FIF(
 
     zero_mask = torch.ones(len(v), dtype=torch.bool, device=v.device)
     zero_mask[index_list] = False
-
     tol = tol * len(index_list) ** 0.5
     # initial settings
     diff = tol + 0.1
@@ -118,7 +115,7 @@ def iphvp_FIF(
     count = 0
     while diff > tol and count < max_iter:
         I_old = I_new
-        I_new = v + I_old - sHVP(model, loss, I_old, index_list)
+        I_new = v + I_old - sHVP(model, loss, I_old)
         diff = torch.norm(I_new - I_old)
         if count % 2 == 0:
             if diff > diff_old:
@@ -127,18 +124,9 @@ def iphvp_FIF(
         count += 1
         if verbose:
             print(
-                f"Computing partial influence ... [{count}/{max_iter}]",
+                f"Computing freeze influence ... [{count}/{max_iter}]",
                 end="\r",
                 flush=True,
             )
 
     return I_new[index_list]
-
-
-def _zeropadding(v: torch.Tensor, index_list, num_params) -> torch.Tensor:
-    """
-    Padding zeros but for params in index_list
-    """
-    zeropad_v = torch.zeros(num_params, device=v.device)
-    zeropad_v[index_list] = v[index_list]
-    return zeropad_v
