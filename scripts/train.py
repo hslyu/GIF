@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch import nn
 
 from dataloader import cifar10, mnist, svhn
-from models import VGG11, FullyConnectedNet, ResNet18, ShuffleNetV2
+from models import VGG, VGG11, FullyConnectedNet, ResNet18, ShuffleNetV2
 from src import regularization, utils
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -132,7 +132,7 @@ def main():
     configs = config.tab2_configs(net_name="ShuffleNetV2", data="SVHN")
     configs = config.tab2_configs(net_name="VGG11", data="CIFAR10")
     configs = config.tab2_configs(
-        net_name="VGG11", data="CIFAR10", retrained=True, exclusive_label=0
+        net_name="VGG11", data="CIFAR10", retrained=True, exclusive_label=1
     )
 
     # Network configuration
@@ -203,13 +203,13 @@ def main():
         net.parameters(), lr=configs.lr, momentum=0.9, weight_decay=5e-4
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-    if configs.net_name == "VGG11":
+    if isinstance(net, VGG):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
     # Data
     print("==> Preparing data..")
     batch_size = configs.batch_size
-    num_workers = 16
+    num_workers = 4
 
     if configs.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers)
@@ -224,8 +224,8 @@ def main():
 
     for epoch in range(start_epoch, start_epoch + configs.num_epoch):
         print("\nEpoch: %d" % epoch)
-        train(net, train_loader, optimizer, criterion)
-        train(net, val_loader, optimizer, criterion)
+        train(net, train_loader, optimizer, criterion, configs.exclusive_label)
+        train(net, val_loader, optimizer, criterion, configs.exclusive_label)
         early_stopping_flag = test(
             net,
             test_loader,
