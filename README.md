@@ -10,7 +10,7 @@ To install requirements:
 ```setup
 conda env create -f conda_env.yaml
 conda activate GIF
- cd GIF && source python_path.sh
+cd GIF && source python_path.sh
 ```
 
 ## Training
