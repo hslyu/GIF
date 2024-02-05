@@ -209,7 +209,7 @@ def main():
     # Data
     print("==> Preparing data..")
     batch_size = configs.batch_size
-    num_workers = 4
+    num_workers = 12
 
     if configs.data == "CIFAR10":
         data_loader = cifar10.CIFAR10DataLoader(batch_size, num_workers)
