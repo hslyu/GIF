@@ -1,4 +1,4 @@
-# Deeper Understanding of Black-box Predictions via Generalized Influence Functions
+## Deeper Understanding of Black-box Predictions via Generalized Influence Functions
 
 This repository is the official implementation of [Deeper Understanding of Black-box Predictions via Generalized Influence Functions](https://arxiv.org/abs/2312.05586). 
 
