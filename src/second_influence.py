@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Author: Hyeonsu Lyu
 # Contact: hslyu4@postech.ac.kr
@@ -80,13 +79,13 @@ def second_influence(
             torch.cuda.empty_cache()
             return first_order_influence + second_order_influence
         else:
-            if verbose:
-                print(
-                    f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
-                    + " " * 30,
-                    end="\r",
-                    flush=True,
-                )
+            # if verbose:
+            #     print(
+            #         f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
+            #         + " " * 30,
+            #         end="\r",
+            #         flush=True,
+            #     )
             normalizer += step
 
 
@@ -119,7 +118,6 @@ def plain_influence(
     Returns:
         torch.Tensor: Influence function
     """
-
     normalizer = normalizer
     while True:
         I_0 = hvp(
@@ -143,11 +141,11 @@ def plain_influence(
             torch.cuda.empty_cache()
             return GIF
         else:
-            if verbose:
-                print(
-                    f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
-                    + " " * 30,
-                    end="\r",
-                    flush=True,
-                )
+            # if verbose:
+            #     print(
+            #         f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
+            #         + " " * 30,
+            #         end="\r",
+            #         flush=True,
+            #     )
             normalizer += step
