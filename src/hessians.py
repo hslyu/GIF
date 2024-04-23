@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Author: Hyeonsu Lyu
 # Contact: hslyu4@postech.ac.kr
@@ -71,7 +70,6 @@ def ihvp(
     Return:
         np.ndarray: Approximation of the IHVP
     """
-
     tol = tol**0.5
     # initial settings
     diff = tol + 0.1
@@ -115,7 +113,6 @@ def hvp(
     Returns:
         torch.Tensor: Hessian-vector product
     """
-
     grads = torch.autograd.grad(
         loss, list(model.parameters()), create_graph=create_graph, retain_graph=True
     )
@@ -128,7 +125,14 @@ def hvp(
 
 
 def influence(
-    model: torch.nn.Module, total_loss: torch.Tensor, loss: torch.Tensor
+    model: torch.nn.Module,
+    total_loss: torch.Tensor,
+    loss: torch.Tensor,
+    tol: float = 1e-4,
+    step: float = 0.5,
+    max_iter: int = 200,
+    verbose: bool = False,
+    normalizer: float = 1,
 ) -> torch.Tensor:
     """
     Compute influence function of a given loss
@@ -143,8 +147,9 @@ def influence(
     Returns:
         torch.Tensor: Influence function
     """
-
-    return ihvp(model, total_loss, compute_gradient(model, loss))
+    return ihvp(
+        model, total_loss, compute_gradient(model, loss), tol, max_iter, verbose
+    )
 
 
 def generalized_influence(
@@ -174,7 +179,6 @@ def generalized_influence(
     Returns:
         torch.Tensor: generalized influence function
     """
-
     normalizer = normalizer
     while True:
         I_0 = hvp(
