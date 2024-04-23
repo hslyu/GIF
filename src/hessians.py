@@ -11,17 +11,16 @@ import torch
 
 
 def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
-    # # Compute the gradients of the loss w.r.t. the parameters
-    # gradients = torch.autograd.grad(loss, model.parameters(), create_graph=True)
-    # # Flatten the gradients into a single vector
-    # gradients = torch.cat([grad.view(-1) for grad in gradients])
-    gradients = compute_gradient(model, loss)
+    # Compute the gradients of the loss w.r.t. the parameters
+    gradients = compute_gradient(model, loss, True)
     # Compute the Hessian matrix
     hessian = torch.zeros(gradients.size()[0], gradients.size()[0])
     for idx in range(gradients.size()[0]):
         # Compute the second-order gradients of the loss w.r.t. each parameter
         second_gradients = torch.autograd.grad(
-            gradients[idx], list(model.parameters()), retain_graph=True
+            gradients[idx],
+            list(model.parameters()),
+            retain_graph=True,
         )
         # Flatten the second-order gradients into a single vector
         second_gradients = torch.cat(
@@ -33,20 +32,30 @@ def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
     return hessian
 
 
-def compute_gradient(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
+def compute_gradient(
+    model: torch.nn.Module, loss: torch.Tensor, create_graph: bool = False
+) -> torch.Tensor:
     return torch.cat(
         [
             grad.view(-1)
             for grad in torch.autograd.grad(
-                loss, list(model.parameters()), retain_graph=True
+                loss,
+                list(model.parameters()),
+                retain_graph=True,
+                create_graph=create_graph,
             )
         ]
     )
 
 
 def ihvp(
-    model: torch.nn.Module, loss: torch.Tensor, v: torch.Tensor, tol: float = 1e-4
-) -> torch.Tensor:
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    v: torch.Tensor,
+    tol: float = 1e-5,
+    max_iter: int = 200,
+    verbose: bool = False,
+):
     """
     A Simple and Efficient Algorithm for Computing the Inverse Hessian-Vector Product.
 
@@ -63,16 +72,29 @@ def ihvp(
         np.ndarray: Approximation of the IHVP
     """
 
-    IHVP_old = v
-    IHVP_new = v + IHVP_old - hvp(model, loss, IHVP_old)
-    while torch.norm(IHVP_new - IHVP_old) > tol:
-        IHVP_old = IHVP_new
-        # IHVP_new = v + (I - Hessian) @ IHVP_old
-        #          = v + IHVP_old - Hessian @ IHVP_old
-        #          = v + IHVP_old - hvp(loss, model, IHVP_old)
-        IHVP_new = v + IHVP_old - hvp(model, loss, IHVP_old)
+    tol = tol**0.5
+    # initial settings
+    diff = tol + 0.1
+    diff_old = 1e10
+    I_new = v
+    count = 0
+    while diff > tol and count < max_iter:
+        I_old = I_new
+        I_new = v + I_old - hvp(model, loss, hvp(model, loss, I_old))
+        diff = torch.norm(I_new - I_old)
+        if count % 2 == 0:
+            if diff > diff_old:
+                return
+            diff_old = diff
+        count += 1
+        if verbose:
+            print(
+                f"Computing generalized influence ... [{count}/{max_iter}]",
+                end="\r",
+                flush=True,
+            )
 
-    return IHVP_new
+    return I_new
 
 
 def hvp(
