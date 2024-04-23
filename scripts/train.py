@@ -94,7 +94,7 @@ def test(net, dataloader, criterion, epoch, configs, exclusive_label=None):
     if test_loss < best_loss:
         dirname = f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/"
         filename = (
-            "ckpt_{configs.alpha}.pth"
+            f"ckpt_{configs.alpha}.pth"
             if configs.exclusive_label is None
             else f"ckpt_{configs.alpha}_{configs.exclusive_label}.pth"
         )
@@ -167,7 +167,7 @@ def main():
     if configs.resume:
         dirname = f"checkpoints/{configs.path}/{configs.net_name}/{configs.criterion}/"
         filename = (
-            "ckpt_{configs.alpha}.pth"
+            f"ckpt_{configs.alpha}.pth"
             if configs.exclusive_label is None
             else f"ckpt_{configs.alpha}_{configs.exclusive_label}.pth"
         )
