@@ -58,9 +58,9 @@ def second_influence(
     # IHVP series is implemented by referring to Eq (12) of "Deeper Understanding of Black-box Predictions via Generalized Influence Functions"
     normalizer = normalizer
     while True:
-        # RHS of Eq. (15)
+        # Terms in the parenthesis of the RHS in Eq. (15)
         I_0 = hvp(model, total_loss - target_loss, first_order_influence) / normalizer
-        # inverse LHS of Eq. (15)
+        # inverse of LHS in Eq. (15)
         second_order_influence = ihvp(
             model,
             total_loss / normalizer,
