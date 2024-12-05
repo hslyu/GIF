@@ -51,20 +51,20 @@ def second_influence(
     # Then, |U| / |S| = ratio
     first_order_influence = (
         plain_influence(model, total_loss, target_loss, tol, step, max_iter, verbose)
-        / (1 - ratio)
         * ratio
+        / (1 - ratio)
     )
 
     # IHVP series is implemented by referring to Eq (12) of "Deeper Understanding of Black-box Predictions via Generalized Influence Functions"
     normalizer = normalizer
     while True:
         # Terms in the parenthesis of the RHS in Eq. (15)
-        I_0 = hvp(model, total_loss - target_loss, first_order_influence) / normalizer
+        I_0 = hvp(model, total_loss - target_loss, first_order_influence)
         # inverse of LHS in Eq. (15)
         second_order_influence = ihvp(
             model,
             total_loss / normalizer,
-            I_0,
+            I_0 / normalizer,
             tol,
             max_iter,
         )
