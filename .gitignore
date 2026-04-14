@@ -1,0 +1,41 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.Python
+.coverage
+.coverage.*
+.hypothesis/
+.ipynb_checkpoints/
+.mypy_cache/
+.nox/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.venv/
+ENV/
+build/
+dist/
+env/
+htmlcov/
+pip-wheel-metadata/
+site/
+venv/
+
+# Conda
+.conda/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local data and outputs
+artifacts/
+checkpoints/
+data/
+logs/
+outputs/
+results/

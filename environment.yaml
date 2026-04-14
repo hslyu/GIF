@@ -1,0 +1,16 @@
+name: gif
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.24
+  - scipy>=1.10
+  - matplotlib>=3.8
+  - pytorch>=2.2
+  - torchvision>=0.17
+  - pytest>=8.0
+  - pip:
+      - opencv-python>=4.8
+      - -e .
