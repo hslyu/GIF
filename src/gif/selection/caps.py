@@ -6,28 +6,52 @@ from .abstract_selection import Selection, _ModuleInfo
 
 
 class CAPS(Selection):
-    def __init__(self, net, ratio, lam=1e-6, min_curv=1e-12):
+    """
+    Recommended CAPS implementation:
+      - Conv2d: one output channel = one block
+      - Linear: one output row = one block
+      - Attention-like Linear (q/k/v with accessible num_heads): one head chunk = one block
+      - whole-block selection only (no parameter picking inside a selected block)
+      - greedy selection by score density = block_score / block_num_params
+    """
+
+    def __init__(
+        self,
+        net,
+        ratio,
+        lam=1e-6,
+        min_curv=1e-12,
+        use_attention_head_blocks=True,
+    ):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
         super().__init__()
         self.net = net
         self.ratio = ratio
         self.lam = lam
         self.min_curv = min_curv
+        self.use_attention_head_blocks = use_attention_head_blocks
         self.module_info_list = []
+
+        self._name_to_module = {}
+        self._module_to_name = {}
+        self._module_to_parent = {}
 
     def _is_single_layer(self, module):
         return list(module.children()) == []
 
-    def _iter_blocks(self):
-        start_index = 0
-        for module in self.net.modules():
-            if not self._is_single_layer(module):
-                continue
+    def _build_module_maps(self):
+        self._name_to_module = dict(self.net.named_modules())
+        self._module_to_name = {}
+        self._module_to_parent = {}
 
-            num_params = sum(p.numel() for p in module.parameters() if p.requires_grad)
-            if num_params > 0 and isinstance(module, (nn.Conv2d, nn.Linear)):
-                yield module, start_index, num_params
-            start_index += num_params
+        for name, module in self.net.named_modules():
+            self._module_to_name[id(module)] = name
+            if "." in name:
+                parent_name = name.rsplit(".", 1)[0]
+                parent = self._name_to_module[parent_name]
+            else:
+                parent = None
+            self._module_to_parent[id(module)] = parent
 
     def _flatten_module_grads(self, module):
         grad_list = []
@@ -40,8 +64,171 @@ class CAPS(Selection):
                 grad_list.append(parameter.grad.detach().flatten())
         return torch.cat(grad_list) if grad_list else torch.empty(0)
 
+    def _looks_like_attention_projection(self, module_name):
+        # conservative heuristics for q/k/v-like projections
+        tokens = (
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "query",
+            "key",
+            "value",
+            "q_lin",
+            "k_lin",
+            "v_lin",
+            ".q.",
+            ".k.",
+            ".v.",
+        )
+        return any(tok in module_name for tok in tokens)
+
+    def _get_num_heads_from_parent(self, module):
+        parent = self._module_to_parent.get(id(module), None)
+        if parent is None:
+            return None
+
+        for attr in ("num_heads", "num_attention_heads", "n_head", "n_heads"):
+            if hasattr(parent, attr):
+                value = getattr(parent, attr)
+                if isinstance(value, int) and value > 0:
+                    return value
+        return None
+
+    def _make_block_dict(
+        self,
+        module,
+        start_index,
+        local_idx,
+        weight_index_list,
+        bias_index_list,
+        tag=None,
+    ):
+        local_idx = np.asarray(local_idx, dtype=int)
+        weight_index_list = np.asarray(weight_index_list, dtype=int)
+        bias_index_list = np.asarray(bias_index_list, dtype=int)
+
+        return {
+            "module": module,
+            "start_index": start_index,
+            "num_params": len(local_idx),
+            "index_list": local_idx,
+            "weight_index_list": weight_index_list,
+            "bias_index_list": bias_index_list,
+            "tag": tag,
+        }
+
+    def _make_conv_channel_blocks(self, module, start_index):
+        blocks = []
+        out_channels = module.weight.shape[0]
+        weight_numel = module.weight.numel()
+        per_channel_numel = module.weight[0].numel()
+
+        for c in range(out_channels):
+            w_start = c * per_channel_numel
+            w_end = (c + 1) * per_channel_numel
+            weight_index_list = np.arange(w_start, w_end, dtype=int)
+
+            if module.bias is not None:
+                bias_local_global = weight_numel + c
+                local_idx = np.concatenate(
+                    [weight_index_list, np.array([bias_local_global], dtype=int)]
+                )
+                bias_index_list = np.array([c], dtype=int)
+            else:
+                local_idx = weight_index_list.copy()
+                bias_index_list = np.empty(0, dtype=int)
+
+            blocks.append(
+                self._make_block_dict(
+                    module=module,
+                    start_index=start_index,
+                    local_idx=local_idx,
+                    weight_index_list=weight_index_list,
+                    bias_index_list=bias_index_list,
+                    tag=f"conv_channel_{c}",
+                )
+            )
+        return blocks
+
+    def _make_linear_row_or_head_blocks(self, module, start_index):
+        """
+        Default: one output row = one block.
+        If this looks like q/k/v projection and parent exposes num_heads,
+        use one attention head chunk = one block.
+        """
+        blocks = []
+        out_features, in_features = module.weight.shape
+        weight_numel = module.weight.numel()
+
+        module_name = self._module_to_name.get(id(module), "")
+        num_heads = None
+        if self.use_attention_head_blocks and self._looks_like_attention_projection(
+            module_name
+        ):
+            num_heads = self._get_num_heads_from_parent(module)
+
+        if num_heads is not None and out_features % num_heads == 0 and num_heads > 0:
+            chunk_size = out_features // num_heads
+            ranges = [(h * chunk_size, (h + 1) * chunk_size) for h in range(num_heads)]
+            tag_prefix = "attn_head"
+        else:
+            ranges = [(r, r + 1) for r in range(out_features)]
+            tag_prefix = "linear_row"
+
+        for block_id, (row_start, row_end) in enumerate(ranges):
+            w_start = row_start * in_features
+            w_end = row_end * in_features
+            weight_index_list = np.arange(w_start, w_end, dtype=int)
+
+            if module.bias is not None:
+                bias_rows = np.arange(row_start, row_end, dtype=int)
+                local_bias_idx = weight_numel + bias_rows
+                local_idx = np.concatenate([weight_index_list, local_bias_idx])
+                bias_index_list = bias_rows
+            else:
+                local_idx = weight_index_list.copy()
+                bias_index_list = np.empty(0, dtype=int)
+
+            blocks.append(
+                self._make_block_dict(
+                    module=module,
+                    start_index=start_index,
+                    local_idx=local_idx,
+                    weight_index_list=weight_index_list,
+                    bias_index_list=bias_index_list,
+                    tag=f"{tag_prefix}_{block_id}",
+                )
+            )
+        return blocks
+
+    def _iter_blocks(self):
+        """
+        Yield primitive whole blocks, not whole modules.
+        """
+        start_index = 0
+
+        for module in self.net.modules():
+            if not self._is_single_layer(module):
+                continue
+
+            num_params = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            if num_params == 0:
+                continue
+
+            if isinstance(module, nn.Conv2d):
+                for block in self._make_conv_channel_blocks(module, start_index):
+                    yield block
+
+            elif isinstance(module, nn.Linear):
+                for block in self._make_linear_row_or_head_blocks(module, start_index):
+                    yield block
+
+            start_index += num_params
+
     def fit(self, target_loader, retained_loader, criterion, device=None):
         self.net.eval()
+        self._build_module_maps()
+
         if device is None:
             try:
                 device = next(self.net.parameters()).device
@@ -49,115 +236,130 @@ class CAPS(Selection):
                 device = torch.device("cpu")
 
         block_specs = list(self._iter_blocks())
-        target_grads = {
-            id(module): torch.zeros(num_params, device=device)
-            for module, _, num_params in block_specs
-        }
-        fisher_diag = {
-            id(module): torch.zeros(num_params, device=device)
-            for module, _, num_params in block_specs
+        if len(block_specs) == 0:
+            raise RuntimeError("No selectable blocks were found.")
+
+        # cache module-level gradients/fisher once, then slice them by block
+        unique_modules = []
+        seen = set()
+        for block in block_specs:
+            module = block["module"]
+            if id(module) not in seen:
+                unique_modules.append(module)
+                seen.add(id(module))
+
+        module_num_params = {
+            id(module): sum(p.numel() for p in module.parameters() if p.requires_grad)
+            for module in unique_modules
         }
 
+        target_grads = {
+            id(module): torch.zeros(module_num_params[id(module)], device=device)
+            for module in unique_modules
+        }
+        fisher_diag = {
+            id(module): torch.zeros(module_num_params[id(module)], device=device)
+            for module in unique_modules
+        }
+
+        # target-data gradients
         target_batches = 0
         self.net.zero_grad(set_to_none=True)
         for inputs, targets in target_loader:
             inputs = inputs.to(device)
             targets = targets.to(device)
+
             loss = criterion(self.net(inputs), targets)
             self.net.zero_grad(set_to_none=True)
             loss.backward()
-            for module, _, _ in block_specs:
+
+            for module in unique_modules:
                 target_grads[id(module)] += self._flatten_module_grads(module)
+
             target_batches += 1
 
         if target_batches == 0:
             raise RuntimeError("target_loader is empty.")
 
-        for module, _, _ in block_specs:
+        for module in unique_modules:
             target_grads[id(module)] /= target_batches
 
+        # retained-data Fisher diagonal
         retained_batches = 0
         self.net.zero_grad(set_to_none=True)
         for inputs, targets in retained_loader:
             inputs = inputs.to(device)
             targets = targets.to(device)
+
             loss = criterion(self.net(inputs), targets)
             self.net.zero_grad(set_to_none=True)
             loss.backward()
-            for module, _, _ in block_specs:
+
+            for module in unique_modules:
                 grad = self._flatten_module_grads(module)
                 fisher_diag[id(module)] += grad * grad
+
             retained_batches += 1
 
         if retained_batches == 0:
             raise RuntimeError("retained_loader is empty.")
 
-        for module, _, _ in block_specs:
+        for module in unique_modules:
             fisher_diag[id(module)] /= retained_batches
 
-        total_params = sum(
-            parameter.numel()
-            for parameter in self.net.parameters()
-            if parameter.requires_grad
-        )
-        budget = int(total_params * self.ratio)
-        budget = max(1, budget)
+        total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
+        budget = max(1, int(total_params * self.ratio))
+        min_block_size = min(block["num_params"] for block in block_specs)
+        budget = max(budget, min_block_size)
 
         scored_blocks = []
-        for module, start_index, num_params in block_specs:
-            block_grad = target_grads[id(module)]
-            block_fisher = fisher_diag[id(module)]
+        for block in block_specs:
+            module = block["module"]
+            idx = torch.as_tensor(block["index_list"], device=device, dtype=torch.long)
+
+            block_grad = target_grads[id(module)][idx]
+            block_fisher = fisher_diag[id(module)][idx]
 
             if torch.mean(block_fisher) < self.min_curv:
                 block_score = float("-inf")
-                local_scores = None
+                score_density = float("-inf")
             else:
                 local_scores = (block_grad * block_grad) / (block_fisher + self.lam)
                 block_score = local_scores.sum().item()
+                score_density = block_score / max(block["num_params"], 1)
 
-            scored_blocks.append(
-                (
-                    block_score,
-                    module,
-                    start_index,
-                    num_params,
-                    local_scores,
-                )
-            )
+            scored_blocks.append((score_density, block_score, block))
 
-        scored_blocks.sort(key=lambda item: item[0], reverse=True)
+        # greedy by density, then by total score
+        scored_blocks.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
         self.module_info_list = []
         used = 0
-        for score, module, start_index, num_params, local_scores in scored_blocks:
-            if used >= budget or score == float("-inf"):
-                break
+        for score_density, block_score, block in scored_blocks:
+            if block_score == float("-inf"):
+                continue
 
-            take = min(num_params, budget - used)
-            if take <= 0:
-                break
-
-            local_idx = torch.topk(local_scores, k=take, largest=True).indices
-            local_idx = local_idx.detach().cpu().numpy().astype(int)
-
-            weight_numel = module.weight.numel()
-            weight_mask = local_idx < weight_numel
-            weight_index_list = local_idx[weight_mask]
-
-            bias_index_list = np.empty(0, dtype=int)
-            if module.bias is not None:
-                bias_index_list = local_idx[~weight_mask] - weight_numel
+            if used + block["num_params"] > budget:
+                continue  # whole-block selection only
 
             module_info = _ModuleInfo(
-                module=module,
-                start_index=start_index,
-                num_params=take,
-                index_list=local_idx,
-                weight_index_list=weight_index_list,
-                bias_index_list=bias_index_list,
+                module=block["module"],
+                start_index=block["start_index"],
+                num_params=block["num_params"],
+                index_list=block["index_list"],
+                weight_index_list=block["weight_index_list"],
+                bias_index_list=block["bias_index_list"],
             )
             self.module_info_list.append(module_info)
-            used += take
+            used += block["num_params"]
+
+            if used >= budget:
+                break
+
+        if len(self.module_info_list) == 0:
+            raise RuntimeError(
+                "No blocks were selected. Consider increasing ratio or reducing min_curv."
+            )
 
         self.net.zero_grad(set_to_none=True)
         return self.module_info_list
@@ -168,14 +370,14 @@ class CAPS(Selection):
             selected_parameter_indices = np.concatenate(
                 (selected_parameter_indices, info.index_list + info.start_index)
             )
-
         return selected_parameter_indices
 
     def update_network(self, vectorized_influence):
         expected_num_params = sum(info.num_params for info in self.module_info_list)
-        assert expected_num_params == len(
-            vectorized_influence
-        ), f"length of vectorized_influence {len(vectorized_influence)} is not equal to the number of selected parameters {expected_num_params}"
+        assert expected_num_params == len(vectorized_influence), (
+            f"length of vectorized_influence {len(vectorized_influence)} "
+            f"is not equal to the number of selected parameters {expected_num_params}"
+        )
 
         with torch.no_grad():
             current = 0

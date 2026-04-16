@@ -1,154 +1,293 @@
 #!/usr/bin/env python3
-
-# Author: Hyeonsu Lyu
-# Contact: hslyu4@postech.ac.kr
-
 import gc
 
 import numpy as np
 import torch
 
 
+def compute_gradient(
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    create_graph: bool = False,
+) -> torch.Tensor:
+    grads = torch.autograd.grad(
+        loss,
+        list(model.parameters()),
+        retain_graph=True,
+        create_graph=create_graph,
+    )
+    return torch.cat([g.contiguous().view(-1) for g in grads])
+
+
 def compute_hessian(model: torch.nn.Module, loss: torch.Tensor) -> torch.Tensor:
-    # Compute the gradients of the loss w.r.t. the parameters
-    gradients = compute_gradient(model, loss, True)
-    # Compute the Hessian matrix
-    hessian = torch.zeros(gradients.size()[0], gradients.size()[0])
-    for idx in range(gradients.size()[0]):
-        # Compute the second-order gradients of the loss w.r.t. each parameter
+    gradients = compute_gradient(model, loss, create_graph=True)
+    hessian = torch.zeros(
+        gradients.numel(),
+        gradients.numel(),
+        device=gradients.device,
+        dtype=gradients.dtype,
+    )
+    for idx in range(gradients.numel()):
         second_gradients = torch.autograd.grad(
             gradients[idx],
             list(model.parameters()),
             retain_graph=True,
         )
-        # Flatten the second-order gradients into a single vector
-        second_gradients = torch.cat(
-            [grad.contiguous().view(-1) for grad in second_gradients]
-        )
-        # Store the second-order gradients in the Hessian matrix
-        hessian[idx] = second_gradients
-
+        hessian[idx] = torch.cat([grad.contiguous().view(-1) for grad in second_gradients])
     return hessian
-
-
-def compute_gradient(
-    model: torch.nn.Module, loss: torch.Tensor, create_graph: bool = False
-) -> torch.Tensor:
-    return torch.cat(
-        [
-            grad.view(-1)
-            for grad in torch.autograd.grad(
-                loss,
-                list(model.parameters()),
-                retain_graph=True,
-                create_graph=create_graph,
-            )
-        ]
-    )
-
-
-def ihvp(
-    model: torch.nn.Module,
-    loss: torch.Tensor,
-    v: torch.Tensor,
-    tol: float = 1e-5,
-    max_iter: int = 200,
-    verbose: bool = False,
-):
-    """
-    A Simple and Efficient Algorithm for Computing the Inverse Hessian-Vector Product.
-
-    References: Koh and Liang. "Understanding Black-box Predictions via Influence Functions."
-                Naman Agarwal. "Second-Order Stochastic Optimization for Machine Learning in Linear Time."
-                Detail descriptions to be updated on github.
-
-    Parameters:
-        loss (np.ndarray): Empirical risk between true and predicted labels
-        model (torch.nn.module): model where the Hessian and gradient is computed
-        tol (float): Tolerance level
-
-    Return:
-        np.ndarray: Approximation of the IHVP
-    """
-    tol = tol**0.5
-    # initial settings
-    diff = tol + 0.1
-    diff_old = 1e10
-    I_new = v
-    count = 0
-    while diff > tol and count < max_iter:
-        I_old = I_new
-        I_new = v + I_old - hvp(model, loss, hvp(model, loss, I_old))
-        diff = torch.norm(I_new - I_old)
-        if count % 2 == 0:
-            if diff > diff_old:
-                return
-            diff_old = diff
-        count += 1
-        if verbose:
-            print(
-                f"Computing generalized influence ... [{count}/{max_iter}]",
-                end="\r",
-                flush=True,
-            )
-
-    return I_new
 
 
 def hvp(
     model: torch.nn.Module,
     loss: torch.Tensor,
     v: torch.Tensor,
-    create_graph: bool = True,
 ) -> torch.Tensor:
     """
-    Fast hessian-vector product (HVP) algorithm.
-    Reference:  Pearlmutter, B. A. "Fast exact multiplication by the hessian."
-                https://stackoverflow.com/questions/74889490/a-faster-hessian-vector-product-in-pytorch
-
-    Parameters:
-        loss (torch.Tensor): Evaluated loss from the model
-        model (torch.nn.Module): Model where the Hessian is computed
-
-    Returns:
-        torch.Tensor: Hessian-vector product
+    Hessian-vector product: H v
     """
     grads = torch.autograd.grad(
-        loss, list(model.parameters()), create_graph=create_graph, retain_graph=True
+        loss,
+        list(model.parameters()),
+        create_graph=True,
+        retain_graph=True,
     )
-    grads = torch.cat([grad.view(-1) for grad in grads])
-    hvp = torch.autograd.grad(
-        grads, list(model.parameters()), grad_outputs=v, retain_graph=True
+    flat_grads = torch.cat([g.contiguous().view(-1) for g in grads])
+    hv = torch.autograd.grad(
+        flat_grads,
+        list(model.parameters()),
+        grad_outputs=v,
+        retain_graph=True,
     )
+    return torch.cat([g.contiguous().view(-1) for g in hv])
 
-    return torch.cat([grad.flatten() for grad in hvp])
+
+def _as_index_tensor(index_list, device):
+    if isinstance(index_list, torch.Tensor):
+        return index_list.to(device=device, dtype=torch.long)
+    return torch.as_tensor(index_list, device=device, dtype=torch.long)
+
+
+def _embed_subset(
+    v_sub: torch.Tensor,
+    index_list,
+    full_dim: int,
+) -> torch.Tensor:
+    idx = _as_index_tensor(index_list, v_sub.device)
+    out = torch.zeros(full_dim, device=v_sub.device, dtype=v_sub.dtype)
+    out[idx] = v_sub
+    return out
+
+
+def _project_subset(
+    v_full: torch.Tensor,
+    index_list,
+) -> torch.Tensor:
+    idx = _as_index_tensor(index_list, v_full.device)
+    return v_full.index_select(0, idx)
+
+
+def _resolve_mu(mu: float | None = None, normalizer: float | None = None) -> float:
+    if normalizer is not None:
+        if normalizer <= 0:
+            raise ValueError("normalizer must be positive")
+        return 1.0 / float(normalizer)
+    if mu is not None:
+        return float(mu)
+    return 1.0
+
+
+def lissa_ihvp(
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    v: torch.Tensor,
+    mu: float = 1.0,
+    tol: float = 1e-8,
+    max_iter: int = 200,
+    verbose: bool = False,
+) -> torch.Tensor:
+    """
+    Classical LiSSA / Neumann solver for H^{-1} v.
+    This is for the FULL-parameter IF path.
+    """
+    rhs = mu * v
+    I = rhs.clone()
+
+    for t in range(max_iter):
+        HI = hvp(model, loss, I)
+        I_next = rhs + I - mu * HI
+        diff = torch.norm(I_next - I)
+
+        if verbose:
+            print(f"LiSSA [{t + 1}/{max_iter}] diff={diff.item():.3e}", end="\r")
+
+        if not torch.isfinite(diff):
+            raise RuntimeError("LiSSA diverged (non-finite iterate).")
+
+        if diff < tol:
+            if verbose:
+                print()
+            return I_next
+
+        I = I_next
+
+    if verbose:
+        print()
+    return I
+
+
+def p_lissa(
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    g_full: torch.Tensor,
+    index_list,
+    mu: float = 1.0,
+    tol: float = 1e-8,
+    max_iter: int = 200,
+    max_restarts: int = 10,
+    verbose: bool = False,
+) -> torch.Tensor:
+    """
+    Paper-faithful p-LiSSA for GIF:
+        I_t = mu * H_J^T g + (I - mu * H_J^T H_J) I_{t-1}
+
+    Returns the J-subspace solution H_J^+ g (up to your sign convention).
+    """
+    full_dim = g_full.numel()
+    idx = _as_index_tensor(index_list, g_full.device)
+
+    # rhs = H_J^T g   (select J coords after H g, using symmetry of H)
+    rhs = _project_subset(hvp(model, loss, g_full), idx)
+
+    for restart in range(max_restarts):
+        I = mu * rhs.clone()
+        prev_diff = None
+
+        for t in range(max_iter):
+            I_full = _embed_subset(I, idx, full_dim)
+
+            # H_J^T H_J I:
+            # 1) embed J-vector into full space
+            # 2) apply H once -> H_J I in full coordinates
+            # 3) apply H again and select J coords -> H_J^T H_J I
+            gram_I = _project_subset(
+                hvp(model, loss, hvp(model, loss, I_full)),
+                idx,
+            )
+
+            I_next = mu * rhs + I - mu * gram_I
+            diff = torch.norm(I_next - I)
+
+            if verbose:
+                print(
+                    f"p-LiSSA restart={restart} iter={t + 1}/{max_iter} "
+                    f"mu={mu:.3e} diff={diff.item():.3e}",
+                    end="\r",
+                )
+
+            # Divergence / instability -> halve mu and restart from scratch
+            if (not torch.isfinite(diff)) or (
+                prev_diff is not None and diff > prev_diff
+            ):
+                mu *= 0.5
+                break
+
+            if diff < tol:
+                if verbose:
+                    print()
+                return I_next
+
+            I = I_next
+            prev_diff = diff
+        else:
+            # loop ended without break
+            if verbose:
+                print()
+            return I
+
+    raise RuntimeError("p-LiSSA failed to converge after all restarts.")
 
 
 def influence(
     model: torch.nn.Module,
     total_loss: torch.Tensor,
     loss: torch.Tensor,
-    tol: float = 1e-4,
-    step: float = 0.5,
+    mu: float = 1.0,
+    tol: float = 1e-8,
     max_iter: int = 200,
     verbose: bool = False,
-    normalizer: float = 1,
+    return_negative_if: bool = False,
+    step: float | None = None,
+    normalizer: float | None = None,
 ) -> torch.Tensor:
     """
-    Compute influence function of a given loss
+    Full-parameter IF path.
 
-    Parameters:
-        loss (torch.Tensor): loss where gradient is computed.
-                             The original influence function takes data points as input,
-                             but this function takes loss for some generalization issues.
-        total_loss (torch.Tensor): loss where hessian is computed.
-        model (torch.nn.Module): Model where gradient and hessian is computed.
-
-    Returns:
-        torch.Tensor: Influence function
+    Paper notation defines IF as -H^{-1} g_w.
+    Many codebases instead return the unlearning displacement +H^{-1} g_w for epsilon=-1.
+    Pick one convention and keep it consistent downstream.
     """
-    return ihvp(
-        model, total_loss, compute_gradient(model, loss), tol, max_iter, verbose
+    g = compute_gradient(model, loss)
+    sol = lissa_ihvp(
+        model=model,
+        loss=total_loss,
+        v=g,
+        mu=_resolve_mu(mu=mu, normalizer=normalizer),
+        tol=tol,
+        max_iter=max_iter,
+        verbose=verbose,
+    )
+    return -sol if return_negative_if else sol
+
+
+def ihvp(
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    v: torch.Tensor,
+    tol: float = 1e-8,
+    max_iter: int = 200,
+    verbose: bool = False,
+    mu: float = 1.0,
+    step: float | None = None,
+    normalizer: float | None = None,
+) -> torch.Tensor:
+    return lissa_ihvp(
+        model=model,
+        loss=loss,
+        v=v,
+        mu=_resolve_mu(mu=mu, normalizer=normalizer),
+        tol=tol,
+        max_iter=max_iter,
+        verbose=verbose,
+    )
+
+
+def iphvp(
+    model: torch.nn.Module,
+    loss: torch.Tensor,
+    v: torch.Tensor,
+    index_list: np.ndarray,
+    tol: float = 1e-8,
+    max_iter: int = 200,
+    verbose: bool = False,
+    mu: float = 1.0,
+    max_restarts: int = 10,
+    step: float | None = None,
+    normalizer: float | None = None,
+) -> torch.Tensor:
+    full_v = v
+    if full_v.numel() == len(index_list):
+        full_dim = sum(parameter.numel() for parameter in model.parameters())
+        full_v = _embed_subset(full_v, index_list, full_dim)
+    return p_lissa(
+        model=model,
+        loss=loss,
+        g_full=full_v,
+        index_list=index_list,
+        mu=_resolve_mu(mu=mu, normalizer=normalizer),
+        tol=tol,
+        max_iter=max_iter,
+        max_restarts=max_restarts,
+        verbose=verbose,
     )
 
 
@@ -157,122 +296,44 @@ def generalized_influence(
     total_loss: torch.Tensor,
     target_loss: torch.Tensor,
     index_list: np.ndarray,
-    tol: float = 1e-4,
-    step: float = 0.5,
+    mu: float = 1.0,
+    tol: float = 1e-8,
     max_iter: int = 200,
+    max_restarts: int = 10,
     verbose: bool = False,
-    normalizer: float = 1,
+    return_full_vector: bool = False,
+    return_negative_if: bool = False,
+    step: float | None = None,
+    normalizer: float | None = None,
 ) -> torch.Tensor:
     """
-    Compute generalized influence function of a given loss
+    GIF / p-LiSSA path.
 
-    Parameters:
-        index_list: list of indices of the parameters where generalized influence is computed.
-        target_loss (torch.Tensor): Loss where gradient is computed.
-                                    The original influence function takes data points as input,
-                                    but this function takes loss for some generalization issues.
-        total_loss (torch.Tensor): loss where hessian is computed.
-        model (torch.nn.Module): Model where gradient and hessian is computed.
-        tol (float): tolerance level for computing inverse hessian-vector product.
-        step (float): step size for normalizing the hessian and gradient.
-
-    Returns:
-        torch.Tensor: generalized influence function
+    Returns the J-subspace vector by default.
+    If return_full_vector=True, scatters it back into the full parameter space.
     """
-    normalizer = normalizer
-    while True:
-        I_0 = hvp(
-            model,
-            total_loss / normalizer,
-            compute_gradient(model, target_loss / normalizer),
-        )
-        zero_mask = torch.ones(len(I_0), dtype=torch.bool, device=I_0.device)
-        zero_mask[index_list] = False
-        I_0[zero_mask] = 0
-        GIF = iphvp(
-            model,
-            total_loss / normalizer,
-            I_0,
-            index_list,
-            tol,
-            max_iter,
-            verbose,
-        )
-        if GIF is not None:
-            if verbose:
-                print("")
-            del I_0
-            gc.collect()
-            torch.cuda.empty_cache()
-            return GIF
-        else:
-            # if verbose: print(
-            #         f"Normalizer {normalizer:.2f} is too small. Increasing normalizer by {step}."
-            #         + " " * 30,
-            #         end="\r",
-            #         flush=True,
-            #     )
-            normalizer += step
+    g_full = compute_gradient(model, target_loss)
 
+    gif_sub = p_lissa(
+        model=model,
+        loss=total_loss,
+        g_full=g_full,
+        index_list=index_list,
+        mu=_resolve_mu(mu=mu, normalizer=normalizer),
+        tol=tol,
+        max_iter=max_iter,
+        max_restarts=max_restarts,
+        verbose=verbose,
+    )
 
-def iphvp(
-    model: torch.nn.Module,
-    loss: torch.Tensor,
-    v: torch.Tensor,
-    index_list: np.ndarray,
-    tol: float = 1e-5,
-    max_iter: int = 200,
-    verbose: bool = False,
-):
-    """
-    A Simple and Efficient Algorithm for Computing the Pseudo-inverse of partial Hessian-Vector Product.
+    if return_negative_if:
+        gif_sub = -gif_sub
 
-    Parameters:
-        loss (np.ndarray): Empirical risk between true and predicted labels
-        model (torch.nn.module): Model where the Hessian and gradient is computed
-        v (torch.Tensor): Vector where the Hessian is multiplied
-        tol (float): Tolerance level
+    if return_full_vector:
+        return _embed_subset(gif_sub, index_list, g_full.numel())
 
-    Return:
-        np.ndarray: Approximation of the IHVP
-    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    def sHVP(
-        model: torch.nn.Module,
-        loss: torch.Tensor,
-        v: torch.Tensor,
-    ):
-        """
-        Subhessian-vector product
-        """
-        twice_HVP = hvp(model, loss, hvp(model, loss, v))
-        twice_HVP[zero_mask] = 0
-
-        return twice_HVP
-
-    zero_mask = torch.ones(len(v), dtype=torch.bool, device=v.device)
-    zero_mask[index_list] = False
-
-    tol = tol * len(index_list) ** 0.5
-    # initial settings
-    diff = tol + 0.1
-    diff_old = 1e10
-    I_new = v
-    count = 0
-    while diff > tol and count < max_iter:
-        I_old = I_new
-        I_new = v + I_old - sHVP(model, loss, I_old)
-        diff = torch.norm(I_new - I_old)
-        if count % 2 == 0:
-            if diff > diff_old:
-                return
-            diff_old = diff
-        count += 1
-        if verbose:
-            print(
-                f"Computing generalized influence ... [{count}/{max_iter}]",
-                end="\r",
-                flush=True,
-            )
-
-    return I_new[index_list]
+    return gif_sub
