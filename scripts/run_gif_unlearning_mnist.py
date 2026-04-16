@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--edit-scale", type=float, default=0.03)
     parser.add_argument("--update-scale", type=float, default=1.0)
     parser.add_argument("--max-update-steps", type=int, default=25)
-    parser.add_argument("--min-retain-acc", type=float, default=80.0)
+    parser.add_argument("--min-retain-acc", type=float, default=98.7)
     parser.add_argument("--target-self-acc", type=float, default=1.0)
     return parser.parse_args()
 
@@ -431,12 +431,21 @@ def run_single_scheme(
             break
 
     model.load_state_dict(best_state)
+    best_metrics = {
+        **best_metrics,
+        "before_self_loss": before_metrics["self_loss"],
+        "before_self_acc": before_metrics["self_acc"],
+        "before_retain_loss": before_metrics["retain_loss"],
+        "before_retain_acc": before_metrics["retain_acc"],
+        "before_score": before_metrics["score"],
+        "retain_acc_drop": before_metrics["retain_acc"] - best_metrics["retain_acc"],
+        "self_acc_drop": before_metrics["self_acc"] - best_metrics["self_acc"],
+    }
     print(format_metrics(f"[{scheme}] Best:", best_metrics))
     return model, best_metrics
 
 
-def main() -> None:
-    args = parse_args()
+def run_experiment(args: argparse.Namespace) -> dict[str, dict[str, float]]:
     device = torch.device(args.device)
     set_seed(args.seed)
 
@@ -497,6 +506,13 @@ def main() -> None:
                 )
             save_checkpoint(best_models[scheme], output_path)
             print(f"Saved {scheme} checkpoint to {output_path}")
+
+    return results
+
+
+def main() -> None:
+    args = parse_args()
+    run_experiment(args)
 
 
 if __name__ == "__main__":
