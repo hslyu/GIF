@@ -13,7 +13,7 @@ class SE(nn.Module):
     '''Squeeze-and-Excitation block.'''
 
     def __init__(self, in_planes, se_planes):
-        super(SE, self).__init__()
+        super().__init__()
         self.se1 = nn.Conv2d(in_planes, se_planes, kernel_size=1, bias=True)
         self.se2 = nn.Conv2d(se_planes, in_planes, kernel_size=1, bias=True)
 
@@ -27,7 +27,7 @@ class SE(nn.Module):
 
 class Block(nn.Module):
     def __init__(self, w_in, w_out, stride, group_width, bottleneck_ratio, se_ratio):
-        super(Block, self).__init__()
+        super().__init__()
         # 1x1
         w_b = int(round(w_out * bottleneck_ratio))
         self.conv1 = nn.Conv2d(w_in, w_b, kernel_size=1, bias=False)
@@ -67,7 +67,7 @@ class Block(nn.Module):
 
 class RegNet(nn.Module):
     def __init__(self, cfg, num_classes=10):
-        super(RegNet, self).__init__()
+        super().__init__()
         self.cfg = cfg
         self.in_planes = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3,
@@ -141,15 +141,3 @@ def RegNetY_400MF():
         'se_ratio': 0.25,
     }
     return RegNet(cfg)
-
-
-def test():
-    net = RegNetX_200MF()
-    print(net)
-    x = torch.randn(2, 3, 32, 32)
-    y = net(x)
-    print(y.shape)
-
-
-if __name__ == '__main__':
-    test()

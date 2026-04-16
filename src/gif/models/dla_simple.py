@@ -17,7 +17,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(
             in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -43,7 +43,7 @@ class BasicBlock(nn.Module):
 
 class Root(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=1):
-        super(Root, self).__init__()
+        super().__init__()
         self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size,
             stride=1, padding=(kernel_size - 1) // 2, bias=False)
@@ -57,7 +57,7 @@ class Root(nn.Module):
 
 class Tree(nn.Module):
     def __init__(self, block, in_channels, out_channels, level=1, stride=1):
-        super(Tree, self).__init__()
+        super().__init__()
         self.root = Root(2*out_channels, out_channels)
         if level == 1:
             self.left_tree = block(in_channels, out_channels, stride=stride)
@@ -77,7 +77,7 @@ class Tree(nn.Module):
 
 class SimpleDLA(nn.Module):
     def __init__(self, block=BasicBlock, num_classes=10):
-        super(SimpleDLA, self).__init__()
+        super().__init__()
         self.base = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(16),
@@ -114,15 +114,3 @@ class SimpleDLA(nn.Module):
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
-
-
-def test():
-    net = SimpleDLA()
-    print(net)
-    x = torch.randn(1, 3, 32, 32)
-    y = net(x)
-    print(y.size())
-
-
-if __name__ == '__main__':
-    test()

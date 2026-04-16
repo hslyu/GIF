@@ -10,7 +10,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class HighestKOutputs(Selection):
     def __init__(self, net, ratio):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(HighestKOutputs, self).__init__()
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.hook_handle_list = []

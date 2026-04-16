@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class TinyNet(nn.Module):
     def __init__(self, **kwargs):
-        super(TinyNet, self).__init__()
+        super().__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(1, 32, 3, 2, 1),
             nn.ReLU(),
@@ -27,9 +27,3 @@ class TinyNet(nn.Module):
         #     x = layer(x)
         x = self.layers(x)
         return x
-
-
-if __name__ == "__main__":
-    a = TinyNet()
-    num_params = sum(p.numel() for p in a.parameters() if p.requires_grad)
-    print(num_params)

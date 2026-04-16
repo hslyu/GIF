@@ -53,7 +53,7 @@ cfg = {
 
 class VGG(nn.Module):
     def __init__(self, vgg_name):
-        super(VGG, self).__init__()
+        super().__init__()
         self.features = self._make_layers(cfg[vgg_name])
         self.classifier = nn.Linear(512, 10)
 
@@ -86,13 +86,3 @@ def VGG16():
 
 def VGG11():
     return VGG("VGG11")
-
-
-def test():
-    net = VGG("VGG11")
-    x = torch.randn(2, 3, 32, 32)
-    y = net(x)
-    print(y.size())
-
-
-# test()

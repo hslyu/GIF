@@ -4,11 +4,13 @@ from torch import nn
 
 from .abstract_selection import Selection, _ModuleInfo
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class HighestKGradients(Selection):
+
+class LowestKGradients(Selection):
     def __init__(self, net, ratio):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(HighestKGradients, self).__init__()
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.hook_handle_list = []
@@ -42,7 +44,7 @@ class HighestKGradients(Selection):
                 num_required_indices = num_params // (num_weights_per_output)
                 leftover = num_params % (num_weights_per_output)
 
-            index_list = torch.sort(batch_abs_mean, descending=True)[1]
+            index_list = torch.sort(batch_abs_mean, descending=False, stable=True)[1]
             # Add the indices of weights
             for index in index_list[:num_required_indices]:
                 selected_index_list = np.concatenate(
@@ -126,18 +128,14 @@ class HighestKGradients(Selection):
                 change_list = vectorized_influence[current : current + info.num_params]
                 current += info.num_params
 
-                weight_change = torch.zeros(
-                    module.weight.numel(), device=module.weight.device
-                )
+                weight_change = torch.zeros(module.weight.numel()).to(device)
                 weight_change[info.weight_index_list] = change_list[
                     : len(info.weight_index_list)
                 ]
                 module.weight.data += weight_change.view_as(module.weight.data)
 
                 if module.bias is not None:
-                    bias_change = torch.zeros(
-                        module.bias.numel(), device=module.bias.device
-                    )
+                    bias_change = torch.zeros(module.bias.numel()).to(device)
                     bias_change[info.bias_index_list] = change_list[
                         len(info.weight_index_list) :
                     ]

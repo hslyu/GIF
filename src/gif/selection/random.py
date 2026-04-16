@@ -10,7 +10,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Random(Selection):
     def __init__(self, net: torch.nn.Module, ratio):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(Random, self).__init__()
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.module_info_list = self._get_module_info_list()

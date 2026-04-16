@@ -15,7 +15,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(
             in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False
         )
@@ -50,7 +50,7 @@ class Bottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, in_planes, planes, stride=1):
-        super(Bottleneck, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(
@@ -86,7 +86,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks, in_channels=3, num_classes=10):
-        super(ResNet, self).__init__()
+        super().__init__()
         self.in_planes = 64
 
         self.conv1 = nn.Conv2d(
@@ -137,12 +137,3 @@ def ResNet101(in_channels=3):
 
 def ResNet152(in_channels=3):
     return ResNet(Bottleneck, [3, 8, 36, 3], in_channels)
-
-
-def test():
-    net = ResNet18()
-    y = net(torch.randn(1, 3, 32, 32))
-    print(y.size())
-
-
-# test()

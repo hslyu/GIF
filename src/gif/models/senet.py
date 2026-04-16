@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 class BasicBlock(nn.Module):
     def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
@@ -44,7 +44,7 @@ class BasicBlock(nn.Module):
 
 class PreActBlock(nn.Module):
     def __init__(self, in_planes, planes, stride=1):
-        super(PreActBlock, self).__init__()
+        super().__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
@@ -78,7 +78,7 @@ class PreActBlock(nn.Module):
 
 class SENet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=10):
-        super(SENet, self).__init__()
+        super().__init__()
         self.in_planes = 64
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -111,11 +111,3 @@ class SENet(nn.Module):
 
 def SENet18():
     return SENet(PreActBlock, [2,2,2,2])
-
-
-def test():
-    net = SENet18()
-    y = net(torch.randn(1,3,32,32))
-    print(y.size())
-
-# test()

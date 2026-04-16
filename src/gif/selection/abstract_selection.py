@@ -1,4 +1,4 @@
-from abc import ABCMeta
+from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -10,17 +10,22 @@ class Selection(metaclass=ABCMeta):
     num_choices: int
     require_backward: bool = False
 
+    @abstractmethod
     def get_parameters(self):
-        pass
+        raise NotImplementedError
 
     def register_hooks(self):
-        pass
+        return []
 
     def remove_hooks(self):
-        pass
+        return None
 
     def initialize_neurons(self):
-        pass
+        return None
+
+    @abstractmethod
+    def update_network(self, vectorized_influence):
+        raise NotImplementedError
 
 
 @dataclass

@@ -26,7 +26,7 @@ class SE(nn.Module):
     '''Squeeze-and-Excitation block with Swish.'''
 
     def __init__(self, in_channels, se_channels):
-        super(SE, self).__init__()
+        super().__init__()
         self.se1 = nn.Conv2d(in_channels, se_channels,
                              kernel_size=1, bias=True)
         self.se2 = nn.Conv2d(se_channels, in_channels,
@@ -51,7 +51,7 @@ class Block(nn.Module):
                  expand_ratio=1,
                  se_ratio=0.,
                  drop_rate=0.):
-        super(Block, self).__init__()
+        super().__init__()
         self.stride = stride
         self.drop_rate = drop_rate
         self.expand_ratio = expand_ratio
@@ -106,7 +106,7 @@ class Block(nn.Module):
 
 class EfficientNet(nn.Module):
     def __init__(self, cfg, num_classes=10):
-        super(EfficientNet, self).__init__()
+        super().__init__()
         self.cfg = cfg
         self.conv1 = nn.Conv2d(3,
                                32,
@@ -162,14 +162,3 @@ def EfficientNetB0():
         'drop_connect_rate': 0.2,
     }
     return EfficientNet(cfg)
-
-
-def test():
-    net = EfficientNetB0()
-    x = torch.randn(2, 3, 32, 32)
-    y = net(x)
-    print(y.shape)
-
-
-if __name__ == '__main__':
-    test()

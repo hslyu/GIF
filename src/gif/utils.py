@@ -1,9 +1,5 @@
-"""Some helper functions for PyTorch, including:
-    - get_mean_and_std: calculate the mean and std value of dataset.
-    - msr_init: net parameter initialization.
-    - progress_bar: progress bar mimic xlua.progress.
-"""
-import os
+"""Helper utilities used by the GIF package."""
+
 import sys
 import time
 
@@ -12,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-from .models import *
+from .models import MODEL_REGISTRY
 
 # _, term_width = os.popen("stty size", "r").read().split()
 # term_width = int(term_width)
@@ -24,10 +20,12 @@ begin_time = last_time
 
 
 def prepare_model(name: str, cfg: str = ""):
-    if cfg == "":
-        return globals()[name]()
-    else:
-        return globals()[name](cfg)
+    if name not in MODEL_REGISTRY:
+        available_models = ", ".join(sorted(MODEL_REGISTRY))
+        raise KeyError(f"Unknown model '{name}'. Available models: {available_models}")
+
+    constructor = MODEL_REGISTRY[name]
+    return constructor() if cfg == "" else constructor(cfg)
 
 
 def maybe_fp16(vec, fp16):

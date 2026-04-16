@@ -4,13 +4,11 @@ from torch import nn
 
 from .abstract_selection import Selection, _ModuleInfo
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-class ExclusiveKGradients(Selection):
+class HighestKGradients(Selection):
     def __init__(self, net, ratio):
-        assert 0 < ratio <= 0.5, "ratio should be in (0, .5]"
-        super(ExclusiveKGradients, self).__init__()
+        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.hook_handle_list = []
@@ -45,10 +43,6 @@ class ExclusiveKGradients(Selection):
                 leftover = num_params % (num_weights_per_output)
 
             index_list = torch.sort(batch_abs_mean, descending=True)[1]
-            # Index except for the top-k-gradients
-            index_list = index_list[num_required_indices:]
-            # Randomly shuffle the indices
-            index_list = index_list[torch.randperm(index_list.size(0))]
             # Add the indices of weights
             for index in index_list[:num_required_indices]:
                 selected_index_list = np.concatenate(
@@ -132,14 +126,18 @@ class ExclusiveKGradients(Selection):
                 change_list = vectorized_influence[current : current + info.num_params]
                 current += info.num_params
 
-                weight_change = torch.zeros(module.weight.numel()).to(device)
+                weight_change = torch.zeros(
+                    module.weight.numel(), device=module.weight.device
+                )
                 weight_change[info.weight_index_list] = change_list[
                     : len(info.weight_index_list)
                 ]
                 module.weight.data += weight_change.view_as(module.weight.data)
 
                 if module.bias is not None:
-                    bias_change = torch.zeros(module.bias.numel()).to(device)
+                    bias_change = torch.zeros(
+                        module.bias.numel(), device=module.bias.device
+                    )
                     bias_change[info.bias_index_list] = change_list[
                         len(info.weight_index_list) :
                     ]

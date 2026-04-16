@@ -7,10 +7,10 @@ from .abstract_selection import Selection, _ModuleInfo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class LowestKOutputs(Selection):
+class ExclusiveKOutputs(Selection):
     def __init__(self, net, ratio):
-        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(LowestKOutputs, self).__init__()
+        assert 0 < ratio <= 0.5, "ratio should be in (0, .5]"
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.hook_handle_list = []
@@ -44,7 +44,12 @@ class LowestKOutputs(Selection):
             else:
                 num_required_indices = num_params // (num_weights_per_output)
                 leftover = num_params % (num_weights_per_output)
-            index_list = torch.sort(batch_abs_mean, descending=False, stable=True)[1]
+
+            index_list = torch.sort(batch_abs_mean, descending=True)[1]
+            # Index except for the top-k-outputs
+            index_list = index_list[num_required_indices:]
+            # Randomly shuffle the indices
+            index_list = index_list[torch.randperm(index_list.size(0))]
             # Add the indices of weights
             for index in index_list[:num_required_indices]:
                 selected_index_list = np.concatenate(

@@ -7,27 +7,29 @@ from .abstract_selection import Selection, _ModuleInfo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class LowestKGradients(Selection):
-    def __init__(self, net, ratio):
-        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(LowestKGradients, self).__init__()
+class Threshold(Selection):
+    def __init__(self, net, ratio, threshold=1.0):
+        super().__init__()
         self.net = net
         self.ratio = ratio
+        self.threshold = threshold
         self.hook_handle_list = []
         self.module_info_list = []
 
     def generate_hook(self, start_index):
-        def hook(module, grad_input, grad_output):
-            module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
-            num_params = int(module_size * self.ratio)
-            module_info = _ModuleInfo(module, start_index, num_params)
-            selected_index_list = np.empty(0, dtype=int)
+        def hook(module, input, output):
+            # Determine the number of neurons to be chosen
+            num_weight_params = int(self.ratio * module.weight.numel())
+            num_bias_params = (
+                0 if module.bias is None else int(self.ratio * module.bias.numel())
+            )
+            num_params = num_weight_params + num_bias_params
 
             if isinstance(module, nn.Linear):
                 # Compute the allotted number of neurons for each rows
                 num_weights_per_output = module.weight.size(1)
                 # Get list of indices of neurons with highest activation
-                batch_abs_mean = torch.abs(torch.mean(grad_output[0], 0))
+                batch_abs_mean = torch.abs(torch.mean(output, 0))
             else:  # isinstance(module, nn.Conv2d):
                 num_weights_per_output = (
                     module.weight.size(1)
@@ -35,52 +37,53 @@ class LowestKGradients(Selection):
                     * module.weight.size(3)
                 )
                 # Get list of indices of neurons with highest activation
-                batch_abs_mean = torch.abs(torch.mean(grad_output[0], (0, 2, 3)))
+                batch_abs_mean = torch.abs(torch.mean(output, (0, 2, 3)))
 
-            if module.bias is not None:
-                num_required_indices = num_params // (num_weights_per_output + 1)
-                leftover = num_params % (num_weights_per_output + 1)
-            else:
-                num_required_indices = num_params // (num_weights_per_output)
-                leftover = num_params % (num_weights_per_output)
+            threshold_index_list = torch.empty(0)
+            num_elements = 0
+            while num_elements < num_params:
+                threshold_index_list = torch.where(batch_abs_mean > self.threshold)[0]
+                if module.bias is None:
+                    num_elements = len(threshold_index_list) * num_weights_per_output
+                else:
+                    num_elements = len(threshold_index_list) * (
+                        num_weights_per_output + 1
+                    )
+                self.threshold -= 0.01
 
-            index_list = torch.sort(batch_abs_mean, descending=False, stable=True)[1]
-            # Add the indices of weights
-            for index in index_list[:num_required_indices]:
-                selected_index_list = np.concatenate(
+            weight_index_pool = np.empty(0)
+            for index in threshold_index_list:
+                weight_index_pool = np.concatenate(
                     (
-                        selected_index_list,
+                        weight_index_pool,
                         np.arange(num_weights_per_output)
                         + num_weights_per_output * index.item(),
                     )
                 )
 
-            # Add the indices of weights for the leftover neurons
-            if leftover != 0:
-                index = index_list[num_required_indices]
-                # random pick leftover number of neurons
-                indices = (
-                    np.random.choice(
-                        np.arange(num_weights_per_output), leftover, replace=False
-                    )
-                    + num_weights_per_output * index.item()
-                )
-                selected_index_list = np.concatenate((selected_index_list, indices))
+            weight_index_list = np.random.choice(
+                weight_index_pool, num_weight_params, replace=False
+            )
 
-            module_info.weight_index_list = selected_index_list
-
+            bias_index_list = np.empty(0, dtype=int)
             if module.bias is not None:
-                module_info.bias_index_list = (
-                    index_list[:num_required_indices].detach().cpu().numpy()
+                bias_index_list = np.random.choice(
+                    threshold_index_list.detach().cpu().numpy(),
+                    num_bias_params,
+                    replace=False,
                 )
-                # Add the indices of the bias
-                selected_index_list = np.concatenate(
-                    (
-                        selected_index_list,
-                        module_info.bias_index_list + module.weight.numel(),
-                    )
-                )
-            module_info.index_list = selected_index_list
+
+            index_list = np.concatenate(
+                (weight_index_list, bias_index_list + module.weight.numel())
+            )
+            module_info = _ModuleInfo(
+                module=module,
+                start_index=start_index,
+                num_params=num_params,
+                index_list=index_list,
+                weight_index_list=weight_index_list,
+                bias_index_list=bias_index_list,
+            )
             self.module_info_list.append(module_info)
 
         return hook
@@ -91,18 +94,18 @@ class LowestKGradients(Selection):
             if not self._is_single_layer(module):
                 continue
 
-            num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
-                hook_handle = module.register_full_backward_hook(hook_fn)
+                hook_handle = module.register_forward_hook(hook_fn)
                 self.hook_handle_list.append(hook_handle)
 
-            start_index += num_param
+            start_index += module_size
         return self.hook_handle_list
 
     def remove_hooks(self):
-        for handle in self.hook_handle_list:
-            handle.remove()
+        for hook in self.hook_handle_list:
+            hook.remove()
 
     def _is_single_layer(self, module):
         return list(module.children()) == []

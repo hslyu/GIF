@@ -8,7 +8,7 @@ from .abstract_selection import Selection, _ModuleInfo
 class CAPS(Selection):
     def __init__(self, net, ratio, lam=1e-6, min_curv=1e-12):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
-        super(CAPS, self).__init__()
+        super().__init__()
         self.net = net
         self.ratio = ratio
         self.lam = lam

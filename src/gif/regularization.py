@@ -4,7 +4,7 @@ from torch import nn
 
 class RegularizedLoss(nn.Module):
     def __init__(self, net, criterion, alpha=1e-4):
-        super(RegularizedLoss, self).__init__()
+        super().__init__()
         self.net = net
         self.criterion = criterion
         self.alpha = alpha

@@ -7,23 +7,22 @@ from .abstract_selection import Selection, _ModuleInfo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class Threshold(Selection):
-    def __init__(self, net, ratio, threshold=1.0):
-        super(Threshold, self).__init__()
+class LowestKOutputs(Selection):
+    def __init__(self, net, ratio):
+        assert 0 < ratio <= 1, "ratio should be in (0, 1]"
+        super().__init__()
         self.net = net
         self.ratio = ratio
-        self.threshold = threshold
         self.hook_handle_list = []
         self.module_info_list = []
 
     def generate_hook(self, start_index):
         def hook(module, input, output):
             # Determine the number of neurons to be chosen
-            num_weight_params = int(self.ratio * module.weight.numel())
-            num_bias_params = (
-                0 if module.bias is None else int(self.ratio * module.bias.numel())
-            )
-            num_params = num_weight_params + num_bias_params
+            module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            num_params = int(module_size * self.ratio)
+            module_info = _ModuleInfo(module, start_index, num_params)
+            selected_index_list = np.empty(0, dtype=int)
 
             if isinstance(module, nn.Linear):
                 # Compute the allotted number of neurons for each rows
@@ -39,51 +38,49 @@ class Threshold(Selection):
                 # Get list of indices of neurons with highest activation
                 batch_abs_mean = torch.abs(torch.mean(output, (0, 2, 3)))
 
-            threshold_index_list = torch.empty(0)
-            num_elements = 0
-            while num_elements < num_params:
-                threshold_index_list = torch.where(batch_abs_mean > self.threshold)[0]
-                if module.bias is None:
-                    num_elements = len(threshold_index_list) * num_weights_per_output
-                else:
-                    num_elements = len(threshold_index_list) * (
-                        num_weights_per_output + 1
-                    )
-                self.threshold -= 0.01
-
-            weight_index_pool = np.empty(0)
-            for index in threshold_index_list:
-                weight_index_pool = np.concatenate(
+            if module.bias is not None:
+                num_required_indices = num_params // (num_weights_per_output + 1)
+                leftover = num_params % (num_weights_per_output + 1)
+            else:
+                num_required_indices = num_params // (num_weights_per_output)
+                leftover = num_params % (num_weights_per_output)
+            index_list = torch.sort(batch_abs_mean, descending=False, stable=True)[1]
+            # Add the indices of weights
+            for index in index_list[:num_required_indices]:
+                selected_index_list = np.concatenate(
                     (
-                        weight_index_pool,
+                        selected_index_list,
                         np.arange(num_weights_per_output)
                         + num_weights_per_output * index.item(),
                     )
                 )
 
-            weight_index_list = np.random.choice(
-                weight_index_pool, num_weight_params, replace=False
-            )
-
-            bias_index_list = np.empty(0, dtype=int)
-            if module.bias is not None:
-                bias_index_list = np.random.choice(
-                    threshold_index_list.detach().cpu().numpy(),
-                    num_bias_params,
-                    replace=False,
+            # Add the indices of weights for the leftover neurons
+            if leftover != 0:
+                index = index_list[num_required_indices]
+                # random pick leftover number of neurons
+                indices = (
+                    np.random.choice(
+                        np.arange(num_weights_per_output), leftover, replace=False
+                    )
+                    + num_weights_per_output * index.item()
                 )
+                selected_index_list = np.concatenate((selected_index_list, indices))
 
-            index_list = np.concatenate(
-                (weight_index_list, bias_index_list + module.weight.numel())
-            )
-            module_info = _ModuleInfo(
-                module=module,
-                start_index=start_index,
-                num_params=num_params,
-                index_list=index_list,
-                weight_index_list=weight_index_list,
-                bias_index_list=bias_index_list,
-            )
+            module_info.weight_index_list = selected_index_list
+
+            if module.bias is not None:
+                module_info.bias_index_list = (
+                    index_list[:num_required_indices].detach().cpu().numpy()
+                )
+                # Add the indices of the bias
+                selected_index_list = np.concatenate(
+                    (
+                        selected_index_list,
+                        module_info.bias_index_list + module.weight.numel(),
+                    )
+                )
+            module_info.index_list = selected_index_list
             self.module_info_list.append(module_info)
 
         return hook
@@ -95,6 +92,7 @@ class Threshold(Selection):
                 continue
 
             module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
+
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_forward_hook(hook_fn)
