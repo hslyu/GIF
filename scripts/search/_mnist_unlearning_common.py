@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from gif.data.mnist import MNISTDataLoader
-from gif.influence import TracIn, generalized_influence
+from gif.influence import HyperInfluence, TracIn, generalized_influence
 from gif.selection import CAPS, HighestKGradients
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -250,6 +250,7 @@ def compute_method_update(
     max_iter: int,
     device: torch.device,
     trajectory_dir: Path | None = None,
+    hyperinf_beta_scale: float = 0.9,
 ) -> tuple[object, torch.Tensor]:
     model.eval()
     total_loss = build_total_loss(
@@ -298,6 +299,17 @@ def compute_method_update(
             device=device,
             index_list=index_list,
         ) * target_scaling
+    elif scheme == "hyperinf":
+        influence = HyperInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            beta_scale=hyperinf_beta_scale,
+            tol=tol,
+            max_iter=max_iter,
+            verbose=False,
+        )
     else:
         influence = generalized_influence(
             model,
@@ -378,6 +390,7 @@ def run_single_scheme(
         max_iter=args.max_iter,
         device=device,
         trajectory_dir=getattr(args, "trajectory_dir", None),
+        hyperinf_beta_scale=getattr(args, "hyperinf_beta_scale", 0.9),
     )
 
     best_metrics = before_metrics

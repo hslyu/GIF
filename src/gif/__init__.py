@@ -5,6 +5,7 @@ from .influence import (
     compute_hessian,
     freeze_influence,
     generalized_influence,
+    hyperinf_update,
     hvp,
     influence,
     iphvp_fif,
@@ -12,7 +13,7 @@ from .influence import (
     second_influence,
 )
 from .influence.freezing import iphvp_fif as iphvp_FIF
-from .solvers import ihvp, iphvp, p_lissa
+from .solvers import hyperinf_inverse, ihvp, iphvp, p_lissa
 from .regularization import RegularizedLoss
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "compute_hessian",
     "freeze_influence",
     "generalized_influence",
+    "hyperinf_inverse",
+    "hyperinf_update",
     "hvp",
     "ihvp",
     "influence",

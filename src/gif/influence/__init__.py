@@ -4,7 +4,7 @@ from .common import compute_gradient, compute_hessian, hvp
 from .datainf import DataInf
 from .freezing import FreezingInfluence, freeze_influence, iphvp_fif
 from .generalized import GeneralizedInfluence, generalized_influence
-from .hypeinf import HypeInf
+from .hypeinf import HypeInf, HyperInfluence, hyperinf_update
 from .projection import (
     _as_index_tensor,
     _embed_subset,
@@ -26,6 +26,7 @@ __all__ = [
     "DataInf",
     "FreezingInfluence",
     "GeneralizedInfluence",
+    "HyperInfluence",
     "HypeInf",
     "InfluenceFunction",
     "InfluenceMethod",
@@ -42,6 +43,7 @@ __all__ = [
     "embed_subset",
     "freeze_influence",
     "generalized_influence",
+    "hyperinf_update",
     "hvp",
     "influence",
     "iphvp_fif",
