@@ -1,17 +1,19 @@
 """Generalized Influence Functions package."""
 
-from .freeze_influence import freeze_influence, iphvp_FIF
-from .hessians import (
+from .influence import (
     compute_gradient,
     compute_hessian,
+    freeze_influence,
     generalized_influence,
     hvp,
-    ihvp,
     influence,
-    iphvp,
+    iphvp_fif,
+    plain_influence,
+    second_influence,
 )
+from .influence.freezing import iphvp_fif as iphvp_FIF
+from .solvers import ihvp, iphvp, p_lissa
 from .regularization import RegularizedLoss
-from .second_influence import plain_influence, second_influence
 
 __all__ = [
     "RegularizedLoss",
@@ -23,7 +25,9 @@ __all__ = [
     "ihvp",
     "influence",
     "iphvp",
+    "p_lissa",
     "iphvp_FIF",
+    "iphvp_fif",
     "plain_influence",
     "second_influence",
 ]

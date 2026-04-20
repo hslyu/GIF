@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .abstract_selection import Selection, _ModuleInfo
+from .base import Selection, _ModuleInfo
 
 
 class CAPS(Selection):
@@ -239,7 +239,6 @@ class CAPS(Selection):
         if len(block_specs) == 0:
             raise RuntimeError("No selectable blocks were found.")
 
-        # cache module-level gradients/fisher once, then slice them by block
         unique_modules = []
         seen = set()
         for block in block_specs:
@@ -308,17 +307,20 @@ class CAPS(Selection):
             fisher_diag[id(module)] /= retained_batches
 
         total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
-        budget = max(1, int(total_params * self.ratio))
-        min_block_size = min(block["num_params"] for block in block_specs)
-        budget = max(budget, min_block_size)
+        global_budget = max(1, int(total_params * self.ratio))
 
-        scored_blocks = []
+        # score blocks and group them by layer(module)
+        layer_to_blocks = {}
+        layer_to_selectable_params = {}
+
         for block in block_specs:
             module = block["module"]
+            layer_key = id(module)
+            layer_name = self._module_to_name.get(layer_key, str(layer_key))
             idx = torch.as_tensor(block["index_list"], device=device, dtype=torch.long)
 
-            block_grad = target_grads[id(module)][idx]
-            block_fisher = fisher_diag[id(module)][idx]
+            block_grad = target_grads[layer_key][idx]
+            block_fisher = fisher_diag[layer_key][idx]
 
             if torch.mean(block_fisher) < self.min_curv:
                 block_score = float("-inf")
@@ -328,33 +330,150 @@ class CAPS(Selection):
                 block_score = local_scores.sum().item()
                 score_density = block_score / max(block["num_params"], 1)
 
-            scored_blocks.append((score_density, block_score, block))
+            scored_block = {
+                "score_density": score_density,
+                "block_score": block_score,
+                "block": block,
+                "layer_key": layer_key,
+                "layer_name": layer_name,
+            }
+            layer_to_blocks.setdefault(layer_key, []).append(scored_block)
 
-        # greedy by density, then by total score
-        scored_blocks.sort(key=lambda x: (x[0], x[1]), reverse=True)
-
-        self.module_info_list = []
-        used = 0
-        for score_density, block_score, block in scored_blocks:
-            if block_score == float("-inf"):
-                continue
-
-            if used + block["num_params"] > budget:
-                continue  # whole-block selection only
-
-            module_info = _ModuleInfo(
-                module=block["module"],
-                start_index=block["start_index"],
-                num_params=block["num_params"],
-                index_list=block["index_list"],
-                weight_index_list=block["weight_index_list"],
-                bias_index_list=block["bias_index_list"],
+        for layer_key, scored_list in layer_to_blocks.items():
+            selectable = sum(
+                item["block"]["num_params"]
+                for item in scored_list
+                if item["block_score"] != float("-inf")
             )
-            self.module_info_list.append(module_info)
-            used += block["num_params"]
+            layer_to_selectable_params[layer_key] = selectable
 
-            if used >= budget:
+        total_selectable = sum(layer_to_selectable_params.values())
+        if total_selectable == 0:
+            raise RuntimeError(
+                "No selectable blocks remain after min_curv filtering. "
+                "Consider reducing min_curv."
+            )
+
+        # guarantee at least one selectable block can fit
+        selectable_block_sizes = [
+            item["block"]["num_params"]
+            for scored_list in layer_to_blocks.values()
+            for item in scored_list
+            if item["block_score"] != float("-inf")
+        ]
+        min_selectable_block_size = min(selectable_block_sizes)
+        global_budget = max(global_budget, min_selectable_block_size)
+
+        # allocate layer budgets proportionally to selectable params
+        layer_budget = {}
+        layer_fraction = {}
+        used_budget_floor = 0
+
+        for layer_key, selectable in layer_to_selectable_params.items():
+            raw = global_budget * (selectable / total_selectable)
+            alloc = int(np.floor(raw))
+            alloc = min(alloc, selectable)
+            layer_budget[layer_key] = alloc
+            layer_fraction[layer_key] = raw - alloc
+            used_budget_floor += alloc
+
+        # distribute remaining budget by largest remainder
+        remaining_budget = global_budget - used_budget_floor
+        for layer_key, _ in sorted(
+            layer_fraction.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        ):
+            if remaining_budget <= 0:
                 break
+            if layer_budget[layer_key] < layer_to_selectable_params[layer_key]:
+                layer_budget[layer_key] += 1
+                remaining_budget -= 1
+
+        # layer-local greedy selection
+        self.module_info_list = []
+        selected_uids = set()
+        used_global = 0
+
+        for layer_key, scored_list in layer_to_blocks.items():
+            scored_list.sort(
+                key=lambda x: (x["score_density"], x["block_score"]),
+                reverse=True,
+            )
+
+            local_budget = layer_budget[layer_key]
+            used_local = 0
+
+            for item in scored_list:
+                block_score = item["block_score"]
+                block = item["block"]
+
+                if block_score == float("-inf"):
+                    continue
+
+                block_size = block["num_params"]
+                if used_local + block_size > local_budget:
+                    continue  # whole-block selection only
+
+                block_uid = (
+                    block["start_index"],
+                    tuple(block["index_list"].tolist()),
+                )
+                if block_uid in selected_uids:
+                    continue
+
+                module_info = _ModuleInfo(
+                    module=block["module"],
+                    start_index=block["start_index"],
+                    num_params=block["num_params"],
+                    index_list=block["index_list"],
+                    weight_index_list=block["weight_index_list"],
+                    bias_index_list=block["bias_index_list"],
+                )
+                self.module_info_list.append(module_info)
+                selected_uids.add(block_uid)
+                used_local += block_size
+                used_global += block_size
+
+        # second pass: fill leftover budget, still respecting layer-local order
+        remaining_global = global_budget - used_global
+        if remaining_global > 0:
+            for layer_key, scored_list in layer_to_blocks.items():
+                if remaining_global <= 0:
+                    break
+
+                for item in scored_list:
+                    if remaining_global <= 0:
+                        break
+
+                    block_score = item["block_score"]
+                    block = item["block"]
+
+                    if block_score == float("-inf"):
+                        continue
+
+                    block_uid = (
+                        block["start_index"],
+                        tuple(block["index_list"].tolist()),
+                    )
+                    if block_uid in selected_uids:
+                        continue
+
+                    block_size = block["num_params"]
+                    if block_size > remaining_global:
+                        continue
+
+                    module_info = _ModuleInfo(
+                        module=block["module"],
+                        start_index=block["start_index"],
+                        num_params=block["num_params"],
+                        index_list=block["index_list"],
+                        weight_index_list=block["weight_index_list"],
+                        bias_index_list=block["bias_index_list"],
+                    )
+                    self.module_info_list.append(module_info)
+                    selected_uids.add(block_uid)
+                    remaining_global -= block_size
 
         if len(self.module_info_list) == 0:
             raise RuntimeError(
@@ -387,7 +506,9 @@ class CAPS(Selection):
                 current += info.num_params
 
                 weight_change = torch.zeros(
-                    module.weight.numel(), device=module.weight.device
+                    module.weight.numel(),
+                    device=module.weight.device,
+                    dtype=module.weight.dtype,
                 )
                 if len(info.weight_index_list) > 0:
                     weight_change[info.weight_index_list] = change_list[
@@ -397,7 +518,9 @@ class CAPS(Selection):
 
                 if module.bias is not None:
                     bias_change = torch.zeros(
-                        module.bias.numel(), device=module.bias.device
+                        module.bias.numel(),
+                        device=module.bias.device,
+                        dtype=module.bias.dtype,
                     )
                     if len(info.bias_index_list) > 0:
                         bias_change[info.bias_index_list] = change_list[

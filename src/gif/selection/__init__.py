@@ -1,4 +1,4 @@
-from .abstract_selection import Selection
+from .base import Selection
 from .caps import CAPS
 from .exclusive_k_gradients import ExclusiveKGradients
 from .exclusive_k_outputs import ExclusiveKOutputs

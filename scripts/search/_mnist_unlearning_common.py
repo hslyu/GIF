@@ -1,18 +1,5 @@
-#!/usr/bin/env python3
-"""
-Minimal MNIST unlearning script using GIF only.
-
-This script is a plain-Python port of the GIF path from
-`GIF_reference/scripts/table2-3-IF_comparison_mnist_0.ipynb`.
-It expects a pretrained MNIST `ResNet18(in_channels=1)` checkpoint and applies
-Generalized Influence Functions to forget one target label while retaining
-performance on the remaining labels.
-"""
-
 from __future__ import annotations
 
-import argparse
-import warnings
 from copy import deepcopy
 from pathlib import Path
 
@@ -21,48 +8,11 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 from gif.data.mnist import MNISTDataLoader
-from gif.hessians import generalized_influence
-from gif.models import ResNet18
+from gif.influence import TracIn, generalized_influence
 from gif.selection import CAPS, HighestKGradients
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run a minimal GIF-based MNIST unlearning experiment."
-    )
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--save-path", type=Path, default=None)
-    parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
-    parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--target-label", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--num-target-samples", type=int, default=256)
-    parser.add_argument("--num-retain-batches", type=int, default=1)
-    parser.add_argument("--param-ratio", type=float, default=0.05)
-    parser.add_argument(
-        "--schemes",
-        nargs="+",
-        choices=["caps", "highest_k_gradients"],
-        default=["caps", "highest_k_gradients"],
-    )
-    parser.add_argument("--caps-lam", type=float, default=1e-6)
-    parser.add_argument("--caps-min-curv", type=float, default=1e-12)
-    parser.add_argument("--tol", type=float, default=1e-8)
-    parser.add_argument("--step", type=float, default=3.0)
-    parser.add_argument("--max-iter", type=int, default=30)
-    parser.add_argument("--edit-scale", type=float, default=0.03)
-    parser.add_argument("--update-scale", type=float, default=1.0)
-    parser.add_argument("--max-update-steps", type=int, default=25)
-    parser.add_argument("--min-retain-acc", type=float, default=98.7)
-    parser.add_argument("--target-self-acc", type=float, default=1.0)
-    return parser.parse_args()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def set_seed(seed: int) -> None:
@@ -123,6 +73,14 @@ def evaluate_split(
     return mean_loss, accuracy
 
 
+def f1_unlearning_score(self_acc: float, retain_acc: float) -> float:
+    self_acc /= 100.0
+    retain_acc /= 100.0
+    if self_acc == 1.0 and retain_acc == 0.0:
+        return 0.0
+    return 2.0 * (1.0 - self_acc) * retain_acc / (1.0 - self_acc + retain_acc)
+
+
 def evaluate_unlearning(
     model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
@@ -144,14 +102,6 @@ def evaluate_unlearning(
         "retain_acc": retain_acc,
         "score": score,
     }
-
-
-def f1_unlearning_score(self_acc: float, retain_acc: float) -> float:
-    self_acc /= 100.0
-    retain_acc /= 100.0
-    if self_acc == 1.0 and retain_acc == 0.0:
-        return 0.0
-    return 2.0 * (1.0 - self_acc) * retain_acc / (1.0 - self_acc + retain_acc)
 
 
 def build_total_loss(
@@ -227,6 +177,15 @@ def build_loader(
     )
 
 
+def filter_batch(
+    inputs: torch.Tensor, targets: torch.Tensor, exclude_label: int | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if exclude_label is None:
+        return inputs, targets
+    mask = targets != exclude_label
+    return inputs[mask], targets[mask]
+
+
 def select_parameters(
     scheme: str,
     model: torch.nn.Module,
@@ -267,17 +226,12 @@ def select_parameters(
         criterion(model(sampled_inputs.to(device)), sampled_targets.to(device))
         * target_scaling
     )
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Full backward hook is firing when gradients are computed with respect to module outputs",
-        )
-        scaled_target_loss.backward()
+    scaled_target_loss.backward()
     selector.remove_hooks()
     return selector
 
 
-def compute_gif_update(
+def compute_method_update(
     scheme: str,
     model: torch.nn.Module,
     train_loader: torch.utils.data.DataLoader,
@@ -292,9 +246,10 @@ def compute_gif_update(
     caps_min_curv: float,
     batch_size: int,
     tol: float,
-    step: float,
+    mu: float,
     max_iter: int,
     device: torch.device,
+    trajectory_dir: Path | None = None,
 ) -> tuple[object, torch.Tensor]:
     model.eval()
     total_loss = build_total_loss(
@@ -331,19 +286,32 @@ def compute_gif_update(
         * target_scaling
     )
 
-    influence = generalized_influence(
-        model,
-        total_loss,
-        target_loss,
-        index_list,
-        tol=tol,
-        step=step,
-        max_iter=max_iter,
-        verbose=False,
-    )
+    if scheme == "tracin":
+        if trajectory_dir is None:
+            raise RuntimeError("TracIn requires a trajectory_dir.")
+        influence = TracIn().compute_update(
+            model=model,
+            trajectory_dir=trajectory_dir,
+            target_inputs=sampled_inputs.to(device),
+            target_targets=sampled_targets.to(device),
+            criterion=criterion,
+            device=device,
+            index_list=index_list,
+        ) * target_scaling
+    else:
+        influence = generalized_influence(
+            model,
+            total_loss,
+            target_loss,
+            index_list,
+            mu=mu,
+            tol=tol,
+            max_iter=max_iter,
+            verbose=False,
+        )
     norm = torch.norm(influence)
     if torch.isnan(norm) or norm.item() == 0.0:
-        raise RuntimeError("GIF update has zero or NaN norm.")
+        raise RuntimeError(f"{scheme} update has zero or NaN norm.")
 
     return selector, influence / norm
 
@@ -380,8 +348,9 @@ def run_single_scheme(
     retained_inputs: torch.Tensor,
     retained_targets: torch.Tensor,
     device: torch.device,
+    model_factory,
 ) -> tuple[torch.nn.Module, dict[str, float]]:
-    model = ResNet18(in_channels=1).to(device)
+    model = model_factory().to(device)
     model.load_state_dict(base_state_dict)
     model.eval()
 
@@ -390,7 +359,7 @@ def run_single_scheme(
     )
     print(format_metrics(f"[{scheme}] Before:", before_metrics))
 
-    selector, normalized_update = compute_gif_update(
+    selector, normalized_update = compute_method_update(
         scheme=scheme,
         model=model,
         train_loader=train_loader,
@@ -405,20 +374,21 @@ def run_single_scheme(
         caps_min_curv=args.caps_min_curv,
         batch_size=args.batch_size,
         tol=args.tol,
-        step=args.step,
+        mu=args.mu,
         max_iter=args.max_iter,
         device=device,
+        trajectory_dir=getattr(args, "trajectory_dir", None),
     )
 
     best_metrics = before_metrics
     best_state = deepcopy(model.state_dict())
 
-    for step_idx in range(1, args.max_update_steps + 1):
-        selector.update_network(normalized_update * args.edit_scale * args.update_scale)
+    for update_step in range(1, args.max_update_steps + 1):
+        selector.update_network(normalized_update * args.edit_scale)
         current_metrics = evaluate_unlearning(
             model, test_loader, criterion, args.target_label, device
         )
-        print(format_metrics(f"[{scheme}] Step {step_idx}:", current_metrics))
+        print(format_metrics(f"[{scheme}] Step {update_step}:", current_metrics))
 
         if current_metrics["score"] > best_metrics["score"]:
             best_metrics = current_metrics
@@ -426,7 +396,7 @@ def run_single_scheme(
 
         if (
             current_metrics["retain_acc"] < args.min_retain_acc
-            or current_metrics["self_acc"] <= args.target_self_acc
+            or current_metrics["self_acc"] < args.target_self_acc
         ):
             break
 
@@ -445,11 +415,15 @@ def run_single_scheme(
     return model, best_metrics
 
 
-def run_experiment(args: argparse.Namespace) -> dict[str, dict[str, float]]:
+def run_experiment(
+    args: argparse.Namespace,
+    model_factory,
+    flatten: bool,
+) -> dict[str, dict[str, float]]:
     device = torch.device(args.device)
     set_seed(args.seed)
 
-    model = ResNet18(in_channels=1).to(device)
+    model = model_factory().to(device)
     load_checkpoint(model, args.checkpoint, device)
     model.eval()
 
@@ -458,6 +432,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, dict[str, float]]:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         validation=False,
+        flatten=flatten,
         root=str(args.data_root),
     )
     train_loader, test_loader = data_loader.get_data_loaders()
@@ -488,6 +463,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, dict[str, float]]:
             retained_inputs=retained_inputs,
             retained_targets=retained_targets,
             device=device,
+            model_factory=model_factory,
         )
         best_models[scheme] = best_model
         results[scheme] = best_metrics
@@ -508,12 +484,3 @@ def run_experiment(args: argparse.Namespace) -> dict[str, dict[str, float]]:
             print(f"Saved {scheme} checkpoint to {output_path}")
 
     return results
-
-
-def main() -> None:
-    args = parse_args()
-    run_experiment(args)
-
-
-if __name__ == "__main__":
-    main()

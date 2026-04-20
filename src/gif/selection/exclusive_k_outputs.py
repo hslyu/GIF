@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .abstract_selection import Selection, _ModuleInfo
+from .base import Selection, _ModuleInfo
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -134,14 +134,18 @@ class ExclusiveKOutputs(Selection):
                 change_list = vectorized_influence[current : current + info.num_params]
                 current += info.num_params
 
-                weight_change = torch.zeros(module.weight.numel()).to(device)
+                weight_change = torch.zeros(
+                    module.weight.numel(), device=device, dtype=module.weight.dtype
+                )
                 weight_change[info.weight_index_list] = change_list[
                     : len(info.weight_index_list)
                 ]
                 module.weight.data += weight_change.view_as(module.weight.data)
 
                 if module.bias is not None:
-                    bias_change = torch.zeros(module.bias.numel()).to(device)
+                    bias_change = torch.zeros(
+                        module.bias.numel(), device=device, dtype=module.bias.dtype
+                    )
                     bias_change[info.bias_index_list] = change_list[
                         len(info.weight_index_list) :
                     ]

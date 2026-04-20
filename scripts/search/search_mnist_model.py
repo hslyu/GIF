@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
-"""Grid search for MNIST GIF unlearning hyperparameters."""
+"""Search GIF unlearning hyperparameters for trained MNIST models."""
 
 from __future__ import annotations
 
 import argparse
 import itertools
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 
-from run_gif_unlearning_mnist import PROJECT_ROOT, run_experiment
+SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from _mnist_unlearning_common import PROJECT_ROOT, run_experiment  # noqa: E402
+from gif.models import FullyConnectedNet, ResNet18, ResNet34  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Search for unlearning hyperparameters that preserve retain accuracy while forgetting the target label."
     )
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument(
+        "--model",
+        choices=["resnet18", "resnet34", "fcn"],
+        default="resnet34",
+    )
+    parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument("--trajectory-dir", type=Path, default=None)
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=0)
@@ -28,53 +40,88 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schemes",
         nargs="+",
-        choices=["caps", "highest_k_gradients"],
-        default=["caps", "highest_k_gradients"],
+        choices=["caps", "highest_k_gradients", "tracin"],
+        default=["caps"],
     )
     parser.add_argument(
         "--param-ratios",
         nargs="+",
         type=float,
-        default=[0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.1],
+        default=[0.03, 0.05, 0.07, 0.1],
     )
+    parser.add_argument("--edit-scale", type=float, default=0.02)
+    parser.add_argument("--caps-lam", type=float, default=1e-5)
     parser.add_argument(
-        "--edit-scales",
+        "--tol-grid",
         nargs="+",
         type=float,
-        default=[0.003, 0.01, 0.03, 0.1, 0.3],
+        default=[1e-3, 1e-4, 1e-5, 1e-6],
     )
-    parser.add_argument(
-        "--update-scales",
-        nargs="+",
-        type=float,
-        default=[0.25, 0.5, 1.0, 2.0, 4.0],
-    )
-    parser.add_argument(
-        "--caps-lams",
-        nargs="+",
-        type=float,
-        default=[1e-8, 1e-7, 1e-6, 1e-5, 1e-4],
-    )
-    parser.add_argument("--tols", nargs="+", type=float, default=[1e-9, 1e-8, 1e-7])
     parser.add_argument("--caps-min-curv", type=float, default=1e-12)
-    parser.add_argument("--steps-grid", nargs="+", type=float, default=[1.0, 3.0, 5.0])
-    parser.add_argument("--max-iters-grid", nargs="+", type=int, default=[20, 30, 50])
-    parser.add_argument("--max-update-steps", type=int, default=25)
-    parser.add_argument("--min-retain-acc", type=float, default=80.0)
+    parser.add_argument("--mu", type=float, default=3.0)
+    parser.add_argument(
+        "--max-iters-grid", nargs="+", type=int, default=[100, 200, 300]
+    )
+    parser.add_argument("--max-update-steps", type=int, default=1000)
+    parser.add_argument("--min-retain-acc", type=float, default=98.5)
     parser.add_argument(
         "--max-retain-acc-drop",
         type=float,
         default=1.0,
         help="Maximum allowed drop in retain accuracy, in percentage points, relative to the original model.",
     )
-    parser.add_argument("--target-self-acc", type=float, default=1.0)
+    parser.add_argument(
+        "--target-self-acc",
+        type=float,
+        default=0.2,
+        help="Stop a run when target self accuracy drops below this percentage value. Example: 0.2 means 0.2%%.",
+    )
     parser.add_argument("--save-json", type=Path, default=None)
+    parser.add_argument("--hidden-size", type=int, default=512)
+    parser.add_argument("--num-layers", type=int, default=8)
+    parser.add_argument("--dropout-prob", type=float, default=0.1)
     return parser.parse_args()
 
 
-def build_run_namespace(search_args: argparse.Namespace, combo: dict[str, float]) -> argparse.Namespace:
+def build_model(args: argparse.Namespace):
+    if args.model == "resnet18":
+        return ResNet18(in_channels=1), False
+    if args.model == "resnet34":
+        return ResNet34(in_channels=1), False
+    if args.model == "fcn":
+        return (
+            FullyConnectedNet(
+                28 * 28,
+                args.hidden_size,
+                10,
+                args.num_layers,
+                args.dropout_prob,
+            ),
+            True,
+        )
+    raise ValueError(f"Unsupported model: {args.model}")
+
+
+def build_checkpoint_path(args: argparse.Namespace) -> Path:
+    if args.checkpoint is not None:
+        return args.checkpoint
+    if args.model == "fcn":
+        return PROJECT_ROOT / "checkpoints" / "mnist_fcn_deep.pth"
+    return PROJECT_ROOT / "checkpoints" / f"mnist_{args.model}.pth"
+
+
+def build_trajectory_path(args: argparse.Namespace) -> Path | None:
+    if args.trajectory_dir is not None:
+        return args.trajectory_dir
+    checkpoint_path = build_checkpoint_path(args)
+    return checkpoint_path.parent / checkpoint_path.stem
+
+
+def build_run_namespace(
+    search_args: argparse.Namespace, combo: dict[str, float]
+) -> argparse.Namespace:
     return argparse.Namespace(
-        checkpoint=search_args.checkpoint,
+        checkpoint=build_checkpoint_path(search_args),
         save_path=None,
         data_root=search_args.data_root,
         device=search_args.device,
@@ -84,15 +131,15 @@ def build_run_namespace(search_args: argparse.Namespace, combo: dict[str, float]
         num_workers=search_args.num_workers,
         num_target_samples=search_args.num_target_samples,
         num_retain_batches=search_args.num_retain_batches,
+        trajectory_dir=build_trajectory_path(search_args),
         param_ratio=combo["param_ratio"],
         schemes=search_args.schemes,
-        caps_lam=combo["caps_lam"],
+        caps_lam=search_args.caps_lam,
         caps_min_curv=search_args.caps_min_curv,
         tol=combo["tol"],
-        step=combo["step"],
+        mu=search_args.mu,
         max_iter=combo["max_iter"],
-        edit_scale=combo["edit_scale"],
-        update_scale=combo["update_scale"],
+        edit_scale=search_args.edit_scale,
         max_update_steps=search_args.max_update_steps,
         min_retain_acc=search_args.min_retain_acc,
         target_self_acc=search_args.target_self_acc,
@@ -101,23 +148,15 @@ def build_run_namespace(search_args: argparse.Namespace, combo: dict[str, float]
 
 def enumerate_combinations(search_args: argparse.Namespace) -> list[dict[str, float]]:
     combos = []
-    for param_ratio, edit_scale, update_scale, caps_lam, tol, step, max_iter in itertools.product(
+    for param_ratio, tol, max_iter in itertools.product(
         search_args.param_ratios,
-        search_args.edit_scales,
-        search_args.update_scales,
-        search_args.caps_lams,
-        search_args.tols,
-        search_args.steps_grid,
+        search_args.tol_grid,
         search_args.max_iters_grid,
     ):
         combos.append(
             {
                 "param_ratio": param_ratio,
-                "edit_scale": edit_scale,
-                "update_scale": update_scale,
-                "caps_lam": caps_lam,
                 "tol": tol,
-                "step": step,
                 "max_iter": max_iter,
             }
         )
@@ -142,6 +181,7 @@ def scheme_rank_tuple(
 
 def main() -> None:
     search_args = parse_args()
+    model, flatten = build_model(search_args)
     combinations = enumerate_combinations(search_args)
     print(f"Searching {len(combinations)} combinations")
 
@@ -152,15 +192,18 @@ def main() -> None:
         print(
             f"\n[{combo_index}/{len(combinations)}] "
             f"param_ratio={combo['param_ratio']} "
-            f"edit_scale={combo['edit_scale']} "
-            f"update_scale={combo['update_scale']} "
-            f"caps_lam={combo['caps_lam']} "
             f"tol={combo['tol']} "
-            f"step={combo['step']} "
-            f"max_iter={combo['max_iter']}"
+            f"max_iter={combo['max_iter']} "
+            f"edit_scale={search_args.edit_scale} "
+            f"caps_lam={search_args.caps_lam} "
+            f"mu={search_args.mu}"
         )
         run_args = build_run_namespace(search_args, combo)
-        run_results = run_experiment(run_args)
+        run_results = run_experiment(
+            run_args,
+            model_factory=lambda: build_model(search_args)[0],
+            flatten=flatten,
+        )
 
         record = {"combo": deepcopy(combo), "results": run_results}
         all_results.append(record)
@@ -196,12 +239,11 @@ def main() -> None:
         print(
             f"{scheme:>20} | "
             f"param_ratio={combo['param_ratio']} | "
-            f"edit_scale={combo['edit_scale']} | "
-            f"update_scale={combo['update_scale']} | "
-            f"caps_lam={combo['caps_lam']} | "
             f"tol={combo['tol']} | "
-            f"step={combo['step']} | "
             f"max_iter={combo['max_iter']} | "
+            f"edit_scale={search_args.edit_scale} | "
+            f"caps_lam={search_args.caps_lam} | "
+            f"mu={search_args.mu} | "
             f"retain_drop={metrics['retain_acc_drop']:.2f} | "
             f"orig_retain_acc={metrics['before_retain_acc']:.2f}% | "
             f"retain_acc={metrics['retain_acc']:.2f}% | "
@@ -213,17 +255,17 @@ def main() -> None:
         search_args.save_json.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "search_args": {
-                "checkpoint": str(search_args.checkpoint),
+                "checkpoint": str(build_checkpoint_path(search_args)),
                 "data_root": str(search_args.data_root),
                 "device": search_args.device,
                 "target_label": search_args.target_label,
+                "model": search_args.model,
                 "schemes": search_args.schemes,
                 "param_ratios": search_args.param_ratios,
-                "edit_scales": search_args.edit_scales,
-                "update_scales": search_args.update_scales,
-                "caps_lams": search_args.caps_lams,
-                "tols": search_args.tols,
-                "steps_grid": search_args.steps_grid,
+                "edit_scale": search_args.edit_scale,
+                "caps_lam": search_args.caps_lam,
+                "tol_grid": search_args.tol_grid,
+                "mu": search_args.mu,
                 "max_iters_grid": search_args.max_iters_grid,
                 "min_retain_acc": search_args.min_retain_acc,
                 "max_retain_acc_drop": search_args.max_retain_acc_drop,

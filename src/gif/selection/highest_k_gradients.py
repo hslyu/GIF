@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .abstract_selection import Selection, _ModuleInfo
+from .base import Selection, _ModuleInfo
 
 
 class HighestKGradients(Selection):
@@ -127,7 +127,9 @@ class HighestKGradients(Selection):
                 current += info.num_params
 
                 weight_change = torch.zeros(
-                    module.weight.numel(), device=module.weight.device
+                    module.weight.numel(),
+                    device=module.weight.device,
+                    dtype=module.weight.dtype,
                 )
                 weight_change[info.weight_index_list] = change_list[
                     : len(info.weight_index_list)
@@ -136,7 +138,9 @@ class HighestKGradients(Selection):
 
                 if module.bias is not None:
                     bias_change = torch.zeros(
-                        module.bias.numel(), device=module.bias.device
+                        module.bias.numel(),
+                        device=module.bias.device,
+                        dtype=module.bias.dtype,
                     )
                     bias_change[info.bias_index_list] = change_list[
                         len(info.weight_index_list) :
