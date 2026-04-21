@@ -31,6 +31,7 @@ from .resnext import ResNeXt29_2x64d, ResNeXt29_4x64d, ResNeXt29_8x64d, ResNeXt2
 from .senet import SENet18
 from .shufflenet import ShuffleNetG2, ShuffleNetG3
 from .shufflenetv2 import ShuffleNetV2
+from .text import TextClassifier, TextTransformerClassifier
 from .tiny import TinyNet
 from .vgg import VGG, VGG11, VGG16
 
@@ -73,6 +74,8 @@ MODEL_REGISTRY = {
     "ShuffleNetV2": ShuffleNetV2,
     "SimpleDLA": SimpleDLA,
     "TinyNet": TinyNet,
+    "TextClassifier": TextClassifier,
+    "TextTransformerClassifier": TextTransformerClassifier,
     "VGG": VGG,
     "VGG11": VGG11,
     "VGG16": VGG16,
@@ -119,6 +122,8 @@ __all__ = [
     "ShuffleNetG3",
     "ShuffleNetV2",
     "SimpleDLA",
+    "TextClassifier",
+    "TextTransformerClassifier",
     "TinyNet",
     "VGG",
     "VGG11",

@@ -68,11 +68,15 @@ def _resolve_device(
 
 
 def _move_batch_to_device(
-    inputs: torch.Tensor,
+    inputs,
     targets: torch.Tensor,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return inputs.to(device), targets.to(device)
+):
+    if isinstance(inputs, (tuple, list)):
+        moved_inputs = tuple(t.to(device) for t in inputs)
+    else:
+        moved_inputs = inputs.to(device)
+    return moved_inputs, targets.to(device)
 
 
 def _capture_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -82,11 +86,14 @@ def _capture_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
 def _batch_gradient(
     model: torch.nn.Module,
     criterion: torch.nn.Module,
-    inputs: torch.Tensor,
+    inputs,
     targets: torch.Tensor,
 ) -> torch.Tensor:
     model.zero_grad(set_to_none=True)
-    loss = criterion(model(inputs), targets)
+    if isinstance(inputs, (tuple, list)):
+        loss = criterion(model(*inputs), targets)
+    else:
+        loss = criterion(model(inputs), targets)
     return compute_gradient(model, loss).detach()
 
 

@@ -265,10 +265,14 @@ class CAPS(Selection):
         target_batches = 0
         self.net.zero_grad(set_to_none=True)
         for inputs, targets in target_loader:
-            inputs = inputs.to(device)
+            if isinstance(inputs, (tuple, list)):
+                inputs = tuple(t.to(device) for t in inputs)
+                outputs = self.net(*inputs)
+            else:
+                inputs = inputs.to(device)
+                outputs = self.net(inputs)
             targets = targets.to(device)
-
-            loss = criterion(self.net(inputs), targets)
+            loss = criterion(outputs, targets)
             self.net.zero_grad(set_to_none=True)
             loss.backward()
 
@@ -287,10 +291,14 @@ class CAPS(Selection):
         retained_batches = 0
         self.net.zero_grad(set_to_none=True)
         for inputs, targets in retained_loader:
-            inputs = inputs.to(device)
+            if isinstance(inputs, (tuple, list)):
+                inputs = tuple(t.to(device) for t in inputs)
+                outputs = self.net(*inputs)
+            else:
+                inputs = inputs.to(device)
+                outputs = self.net(inputs)
             targets = targets.to(device)
-
-            loss = criterion(self.net(inputs), targets)
+            loss = criterion(outputs, targets)
             self.net.zero_grad(set_to_none=True)
             loss.backward()
 
