@@ -9,9 +9,20 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from gif.data.mnist import MNISTDataLoader
-from gif.influence import DataInfluence, HyperInfluence, TracIn, generalized_influence
+from gif.influence import (
+    CGInfluence,
+    DataInfluence,
+    FreezingInfluence,
+    HyperInfluence,
+    InfluenceFunction,
+    LiSSAInfluence,
+    SecondOrderInfluence,
+    TracIn,
+    generalized_influence,
+    project_subset,
+)
 from gif.models import trainable_parameters_to_vector, vector_to_trainable_parameters
-from gif.selection import CAPS, HighestKGradients
+from gif.selection import CAPS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -218,33 +229,20 @@ def select_parameters(
         if not hasattr(model, "lora_rank"):
             raise RuntimeError("DataInf now requires a LoRA model. Use model=fcn_lora.")
         return TrainableParameterSelector(model)
-    if scheme == "caps":
-        selector = CAPS(
-            model,
-            ratio=param_ratio,
-            lam=caps_lam,
-            min_curv=caps_min_curv,
-        )
-        target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
-        retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
-        selector.fit(
-            target_loader=target_loader,
-            retained_loader=retained_loader,
-            criterion=criterion,
-            device=device,
-        )
-        return selector
-
-    selector = HighestKGradients(model, param_ratio)
-    selector.register_hooks()
-
-    model.zero_grad(set_to_none=True)
-    scaled_target_loss = (
-        criterion(model(sampled_inputs.to(device)), sampled_targets.to(device))
-        * target_scaling
+    selector = CAPS(
+        model,
+        ratio=param_ratio,
+        lam=caps_lam,
+        min_curv=caps_min_curv,
     )
-    scaled_target_loss.backward()
-    selector.remove_hooks()
+    target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
+    retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
+    selector.fit(
+        target_loader=target_loader,
+        retained_loader=retained_loader,
+        criterion=criterion,
+        device=device,
+    )
     return selector
 
 
@@ -269,6 +267,7 @@ def compute_method_update(
     trajectory_dir: Path | None = None,
     hyperinf_beta_scale: float = 0.9,
     datainf_damping: float = 1e-6,
+    solver_damping: float = 0.0,
 ) -> tuple[object, torch.Tensor]:
     model.eval()
     total_loss = build_total_loss(
@@ -313,6 +312,47 @@ def compute_method_update(
             target_loss=target_loss,
             damping=datainf_damping,
         )
+    elif scheme == "influence":
+        influence = project_subset(
+            InfluenceFunction().compute(
+                model=model,
+                total_loss=total_loss,
+                loss=target_loss,
+                mu=mu,
+                tol=tol,
+                max_iter=max_iter,
+                verbose=False,
+            ),
+            index_list,
+        )
+    elif scheme == "second_influence":
+        influence = project_subset(
+            SecondOrderInfluence().compute(
+                model=model,
+                total_loss=total_loss,
+                target_loss=target_loss,
+                num_total_data=len(train_loader.dataset),
+                num_target_data=all_target_count,
+                tol=tol,
+                step=0.5,
+                max_iter=max_iter,
+                verbose=False,
+                normalizer=1.0,
+            ),
+            index_list,
+        )
+    elif scheme == "freeze_influence":
+        influence = FreezingInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            tol=tol,
+            step=0.5,
+            max_iter=max_iter,
+            verbose=False,
+            normalizer=1.0,
+        )
     elif scheme == "tracin":
         if trajectory_dir is None:
             raise RuntimeError("TracIn requires a trajectory_dir.")
@@ -332,6 +372,30 @@ def compute_method_update(
             target_loss=target_loss,
             index_list=index_list,
             beta_scale=hyperinf_beta_scale,
+            tol=tol,
+            max_iter=max_iter,
+            verbose=False,
+        )
+    elif scheme == "lissa":
+        influence = LiSSAInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            damping=solver_damping,
+            mu=mu,
+            tol=tol,
+            max_iter=max_iter,
+            max_restarts=8,
+            verbose=False,
+        )
+    elif scheme == "cg":
+        influence = CGInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            damping=solver_damping,
             tol=tol,
             max_iter=max_iter,
             verbose=False,
@@ -418,6 +482,7 @@ def run_single_scheme(
         trajectory_dir=getattr(args, "trajectory_dir", None),
         hyperinf_beta_scale=getattr(args, "hyperinf_beta_scale", 0.9),
         datainf_damping=getattr(args, "datainf_damping", 1e-6),
+        solver_damping=getattr(args, "solver_damping", 0.0),
     )
 
     best_metrics = before_metrics

@@ -1,6 +1,7 @@
 """Generalized Influence Functions package."""
 
 from .influence import (
+    cg_update,
     compute_gradient,
     compute_hessian,
     datainf_update,
@@ -10,15 +11,28 @@ from .influence import (
     hvp,
     influence,
     iphvp_fif,
+    lanczos_update,
+    lissa_update,
     plain_influence,
     second_influence,
 )
 from .influence.freezing import iphvp_fif as iphvp_FIF
-from .solvers import datainf_inverse_diagonal, hyperinf_inverse, ihvp, iphvp, p_lissa
+from .solvers import (
+    cg_inverse,
+    datainf_inverse_diagonal,
+    hyperinf_inverse,
+    ihvp,
+    iphvp,
+    lanczos_inverse,
+    lissa_inverse,
+    p_lissa,
+)
 from .regularization import RegularizedLoss
 
 __all__ = [
     "RegularizedLoss",
+    "cg_inverse",
+    "cg_update",
     "compute_gradient",
     "compute_hessian",
     "datainf_inverse_diagonal",
@@ -32,6 +46,10 @@ __all__ = [
     "influence",
     "iphvp",
     "p_lissa",
+    "lanczos_inverse",
+    "lanczos_update",
+    "lissa_inverse",
+    "lissa_update",
     "iphvp_FIF",
     "iphvp_fif",
     "plain_influence",

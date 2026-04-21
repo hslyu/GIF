@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-"""
-Minimal MNIST unlearning script using GIF only.
-
-This script is a plain-Python port of the GIF path from
-`GIF_reference/scripts/table2-3-IF_comparison_mnist_0.ipynb`.
-It expects a pretrained MNIST `ResNet18(in_channels=1)` checkpoint and applies
-Generalized Influence Functions to forget one target label while retaining
-performance on the remaining labels.
-"""
+"""Minimal MNIST unlearning script for influence-based baselines."""
 
 from __future__ import annotations
 
 import argparse
-import warnings
 from copy import deepcopy
 from pathlib import Path
 
@@ -24,14 +15,22 @@ from torch.utils.data import DataLoader, TensorDataset
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from gif.data.mnist import MNISTDataLoader
-from gif.influence import generalized_influence
+from gif.influence import (
+    CGInfluence,
+    FreezingInfluence,
+    InfluenceFunction,
+    LiSSAInfluence,
+    SecondOrderInfluence,
+    generalized_influence,
+    project_subset,
+)
 from gif.models import ResNet18
-from gif.selection import CAPS, HighestKGradients
+from gif.selection import CAPS
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a minimal GIF-based MNIST unlearning experiment."
+        description="Run a minimal MNIST unlearning experiment."
     )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--save-path", type=Path, default=None)
@@ -49,8 +48,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schemes",
         nargs="+",
-        choices=["caps", "highest_k_gradients", "tracin", "hyperinf", "datainf"],
-        default=["caps", "highest_k_gradients"],
+        choices=[
+            "gif",
+            "influence",
+            "second_influence",
+            "freeze_influence",
+            "tracin",
+            "hyperinf",
+            "lissa",
+            "cg",
+            "datainf",
+        ],
+        default=["gif"],
     )
     parser.add_argument(
         "--trajectory-dir",
@@ -64,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
     parser.add_argument("--datainf-damping", type=float, default=1e-6)
+    parser.add_argument("--solver-damping", type=float, default=0.0)
     parser.add_argument("--max-iter", type=int, default=30)
     parser.add_argument("--edit-scale", type=float, default=0.03)
     parser.add_argument("--max-update-steps", type=int, default=25)
@@ -254,38 +264,20 @@ def select_parameters(
     batch_size: int,
     device: torch.device,
 ):
-    if scheme == "caps":
-        selector = CAPS(
-            model,
-            ratio=param_ratio,
-            lam=caps_lam,
-            min_curv=caps_min_curv,
-        )
-        target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
-        retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
-        selector.fit(
-            target_loader=target_loader,
-            retained_loader=retained_loader,
-            criterion=criterion,
-            device=device,
-        )
-        return selector
-
-    selector = HighestKGradients(model, param_ratio)
-    selector.register_hooks()
-
-    model.zero_grad(set_to_none=True)
-    scaled_target_loss = (
-        criterion(model(sampled_inputs.to(device)), sampled_targets.to(device))
-        * target_scaling
+    selector = CAPS(
+        model,
+        ratio=param_ratio,
+        lam=caps_lam,
+        min_curv=caps_min_curv,
     )
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Full backward hook is firing when gradients are computed with respect to module outputs",
-        )
-        scaled_target_loss.backward()
-    selector.remove_hooks()
+    target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
+    retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
+    selector.fit(
+        target_loader=target_loader,
+        retained_loader=retained_loader,
+        criterion=criterion,
+        device=device,
+    )
     return selector
 
 
@@ -307,6 +299,7 @@ def compute_gif_update(
     mu: float,
     max_iter: int,
     device: torch.device,
+    solver_damping: float = 0.0,
 ) -> tuple[object, torch.Tensor]:
     model.eval()
     total_loss = build_total_loss(
@@ -343,19 +336,85 @@ def compute_gif_update(
         * target_scaling
     )
 
-    influence = generalized_influence(
-        model,
-        total_loss,
-        target_loss,
-        index_list,
-        mu=mu,
-        tol=tol,
-        max_iter=max_iter,
-        verbose=False,
-    )
+    if scheme == "influence":
+        influence = project_subset(
+            InfluenceFunction().compute(
+                model=model,
+                total_loss=total_loss,
+                loss=target_loss,
+                mu=mu,
+                tol=tol,
+                max_iter=max_iter,
+                verbose=False,
+            ),
+            index_list,
+        )
+    elif scheme == "second_influence":
+        influence = project_subset(
+            SecondOrderInfluence().compute(
+                model=model,
+                total_loss=total_loss,
+                target_loss=target_loss,
+                num_total_data=len(train_loader.dataset),
+                num_target_data=all_target_count,
+                tol=tol,
+                step=0.5,
+                max_iter=max_iter,
+                verbose=False,
+                normalizer=1.0,
+            ),
+            index_list,
+        )
+    elif scheme == "freeze_influence":
+        influence = FreezingInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            tol=tol,
+            step=0.5,
+            max_iter=max_iter,
+            verbose=False,
+            normalizer=1.0,
+        )
+    elif scheme == "lissa":
+        influence = LiSSAInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            damping=solver_damping,
+            mu=mu,
+            tol=tol,
+            max_iter=max_iter,
+            max_restarts=8,
+            verbose=False,
+        )
+    elif scheme == "cg":
+        influence = CGInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            index_list=index_list,
+            damping=solver_damping,
+            tol=tol,
+            max_iter=max_iter,
+            verbose=False,
+        )
+    else:
+        influence = generalized_influence(
+            model,
+            total_loss,
+            target_loss,
+            index_list,
+            mu=mu,
+            tol=tol,
+            max_iter=max_iter,
+            verbose=False,
+        )
     norm = torch.norm(influence)
     if torch.isnan(norm) or norm.item() == 0.0:
-        raise RuntimeError("GIF update has zero or NaN norm.")
+        raise RuntimeError(f"{scheme} update has zero or NaN norm.")
 
     return selector, influence / norm
 
@@ -420,6 +479,7 @@ def run_single_scheme(
         mu=args.mu,
         max_iter=args.max_iter,
         device=device,
+        solver_damping=args.solver_damping,
     )
 
     best_metrics = before_metrics
