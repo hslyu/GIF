@@ -3,6 +3,7 @@
 from .influence import (
     compute_gradient,
     compute_hessian,
+    datainf_update,
     freeze_influence,
     generalized_influence,
     hyperinf_update,
@@ -13,13 +14,15 @@ from .influence import (
     second_influence,
 )
 from .influence.freezing import iphvp_fif as iphvp_FIF
-from .solvers import hyperinf_inverse, ihvp, iphvp, p_lissa
+from .solvers import datainf_inverse_diagonal, hyperinf_inverse, ihvp, iphvp, p_lissa
 from .regularization import RegularizedLoss
 
 __all__ = [
     "RegularizedLoss",
     "compute_gradient",
     "compute_hessian",
+    "datainf_inverse_diagonal",
+    "datainf_update",
     "freeze_influence",
     "generalized_influence",
     "hyperinf_inverse",

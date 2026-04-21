@@ -6,6 +6,15 @@ from .efficientnet import EfficientNetB0
 from .fcn import FullyConnectedNet
 from .googlenet import GoogLeNet
 from .lenet import LeNet
+from .lora import (
+    LoRALinear,
+    LoRAFullyConnectedNet,
+    count_trainable_parameters,
+    get_trainable_parameters,
+    load_base_state_dict_into_lora,
+    trainable_parameters_to_vector,
+    vector_to_trainable_parameters,
+)
 from .mobilenet import MobileNet
 from .mobilenetv2 import MobileNetV2
 from .pnasnet import PNASNetA, PNASNetB
@@ -81,6 +90,8 @@ __all__ = [
     "FullyConnectedNet",
     "GoogLeNet",
     "LeNet",
+    "LoRALinear",
+    "LoRAFullyConnectedNet",
     "MODEL_REGISTRY",
     "MobileNet",
     "MobileNetV2",
@@ -112,4 +123,9 @@ __all__ = [
     "VGG",
     "VGG11",
     "VGG16",
+    "count_trainable_parameters",
+    "get_trainable_parameters",
+    "load_base_state_dict_into_lora",
+    "trainable_parameters_to_vector",
+    "vector_to_trainable_parameters",
 ]

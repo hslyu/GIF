@@ -15,7 +15,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from _mnist_unlearning_common import PROJECT_ROOT, run_experiment  # noqa: E402
-from gif.models import FullyConnectedNet, ResNet18, ResNet34  # noqa: E402
+from gif.models import FullyConnectedNet, LoRAFullyConnectedNet, ResNet18, ResNet34  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=["resnet18", "resnet34", "fcn"],
+        choices=["resnet18", "resnet34", "fcn", "fcn_lora"],
         default="resnet34",
     )
     parser.add_argument("--checkpoint", type=Path, default=None)
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schemes",
         nargs="+",
-        choices=["caps", "highest_k_gradients", "tracin", "hyperinf"],
+        choices=["caps", "highest_k_gradients", "tracin", "hyperinf", "datainf"],
         default=["caps"],
     )
     parser.add_argument(
@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--caps-min-curv", type=float, default=1e-12)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
+    parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument(
         "--max-iters-grid", nargs="+", type=int, default=[100, 200, 300]
     )
@@ -81,6 +82,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=512)
     parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=float, default=16.0)
     return parser.parse_args()
 
 
@@ -100,6 +103,19 @@ def build_model(args: argparse.Namespace):
             ),
             True,
         )
+    if args.model == "fcn_lora":
+        return (
+            LoRAFullyConnectedNet(
+                28 * 28,
+                args.hidden_size,
+                10,
+                args.num_layers,
+                args.dropout_prob,
+                args.lora_rank,
+                args.lora_alpha,
+            ),
+            True,
+        )
     raise ValueError(f"Unsupported model: {args.model}")
 
 
@@ -108,6 +124,8 @@ def build_checkpoint_path(args: argparse.Namespace) -> Path:
         return args.checkpoint
     if args.model == "fcn":
         return PROJECT_ROOT / "checkpoints" / "mnist_fcn_deep.pth"
+    if args.model == "fcn_lora":
+        return PROJECT_ROOT / "checkpoints" / "mnist_fcn_lora.pth"
     return PROJECT_ROOT / "checkpoints" / f"mnist_{args.model}.pth"
 
 
@@ -140,6 +158,7 @@ def build_run_namespace(
         tol=combo["tol"],
         mu=search_args.mu,
         hyperinf_beta_scale=search_args.hyperinf_beta_scale,
+        datainf_damping=search_args.datainf_damping,
         max_iter=combo["max_iter"],
         edit_scale=search_args.edit_scale,
         max_update_steps=search_args.max_update_steps,
@@ -199,7 +218,8 @@ def main() -> None:
             f"edit_scale={search_args.edit_scale} "
             f"caps_lam={search_args.caps_lam} "
             f"mu={search_args.mu} "
-            f"hyperinf_beta_scale={search_args.hyperinf_beta_scale}"
+            f"hyperinf_beta_scale={search_args.hyperinf_beta_scale} "
+            f"datainf_damping={search_args.datainf_damping}"
         )
         run_args = build_run_namespace(search_args, combo)
         run_results = run_experiment(
@@ -248,6 +268,7 @@ def main() -> None:
             f"caps_lam={search_args.caps_lam} | "
             f"mu={search_args.mu} | "
             f"hyperinf_beta_scale={search_args.hyperinf_beta_scale} | "
+            f"datainf_damping={search_args.datainf_damping} | "
             f"retain_drop={metrics['retain_acc_drop']:.2f} | "
             f"orig_retain_acc={metrics['before_retain_acc']:.2f}% | "
             f"retain_acc={metrics['retain_acc']:.2f}% | "
@@ -271,9 +292,12 @@ def main() -> None:
                 "tol_grid": search_args.tol_grid,
                 "mu": search_args.mu,
                 "hyperinf_beta_scale": search_args.hyperinf_beta_scale,
+                "datainf_damping": search_args.datainf_damping,
                 "max_iters_grid": search_args.max_iters_grid,
                 "min_retain_acc": search_args.min_retain_acc,
                 "max_retain_acc_drop": search_args.max_retain_acc_drop,
+                "lora_rank": search_args.lora_rank,
+                "lora_alpha": search_args.lora_alpha,
             },
             "best_by_scheme": best_by_scheme,
             "all_results": all_results,

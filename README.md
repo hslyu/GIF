@@ -8,11 +8,14 @@ This repository is organized as a normal Python package so reviewers and readers
 
 The repository currently focuses on the reusable library code:
 
-- influence and Hessian utilities
+- influence methods and solver utilities
 - model definitions
 - dataset loader helpers
 - parameter selection modules
 - unit and integration tests
+
+Current baseline note:
+- `DataInf` is exposed as a LoRA-only baseline and is intended for `fcn_lora` experiments in the current repository state.
 
 Experimental training and figure-generation scripts are intentionally excluded from this first refactor pass.
 
@@ -23,19 +26,23 @@ GIF/
 ├── environment.yaml
 ├── pyproject.toml
 ├── README.md
+├── docs/
 ├── src/gif/
+│   ├── influence/
 │   ├── data/
 │   ├── models/
 │   ├── selection/
-│   ├── freeze_influence.py
-│   ├── hessians.py
-│   ├── lanczos.py
+│   ├── solvers/
 │   ├── regularization.py
-│   ├── second_influence.py
 │   └── utils.py
+├── scripts/
+│   ├── search/
+│   └── train/
 └── tests/
+    ├── influence/
     ├── integration/
-    └── unit/
+    ├── selection/
+    └── solvers/
 ```
 
 ## Installation
@@ -59,11 +66,13 @@ pip install -e .
 pytest
 ```
 
+Slow integration checks stay opt-in through environment variables.
+
 ## Example API
 
 ```python
 import torch
-from gif.hessians import compute_gradient, generalized_influence
+from gif.influence import compute_gradient, generalized_influence
 from gif.models import LeNet
 
 model = LeNet()

@@ -1,7 +1,7 @@
 from .base import InfluenceMethod
 from .classical import InfluenceFunction, influence
 from .common import compute_gradient, compute_hessian, hvp
-from .datainf import DataInf
+from .datainf import DataInf, DataInfluence, datainf_update
 from .freezing import FreezingInfluence, freeze_influence, iphvp_fif
 from .generalized import GeneralizedInfluence, generalized_influence
 from .hypeinf import HypeInf, HyperInfluence, hyperinf_update
@@ -24,6 +24,7 @@ from .tracin import (
 
 __all__ = [
     "DataInf",
+    "DataInfluence",
     "FreezingInfluence",
     "GeneralizedInfluence",
     "HyperInfluence",
@@ -40,6 +41,7 @@ __all__ = [
     "as_index_tensor",
     "compute_gradient",
     "compute_hessian",
+    "datainf_update",
     "embed_subset",
     "freeze_influence",
     "generalized_influence",

@@ -9,7 +9,14 @@ from pathlib import Path
 import torch
 
 from _mnist_train_common import PROJECT_ROOT, train_mnist_model
-from gif.models import FullyConnectedNet, LeNet, ResNet18, ResNet34
+from gif.models import (
+    FullyConnectedNet,
+    LeNet,
+    LoRAFullyConnectedNet,
+    ResNet18,
+    ResNet34,
+    load_base_state_dict_into_lora,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=["resnet18", "resnet34", "lenet", "fcn"],
+        choices=["resnet18", "resnet34", "lenet", "fcn", "fcn_lora"],
         default="resnet18",
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
@@ -58,6 +65,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=256)
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=float, default=16.0)
+    parser.add_argument(
+        "--base-checkpoint",
+        type=Path,
+        default=PROJECT_ROOT / "checkpoints" / "mnist_fcn_deep.pth",
+        help="Base checkpoint used to initialize frozen FCN weights for LoRA.",
+    )
     return parser.parse_args()
 
 
@@ -68,6 +83,19 @@ def build_model(args: argparse.Namespace):
         return ResNet34(in_channels=1), False
     if args.model == "lenet":
         return LeNet(), False
+    if args.model == "fcn_lora":
+        return (
+            LoRAFullyConnectedNet(
+                28 * 28,
+                args.hidden_size,
+                10,
+                args.num_layers,
+                args.dropout_prob,
+                args.lora_rank,
+                args.lora_alpha,
+            ),
+            True,
+        )
     return (
         FullyConnectedNet(
             28 * 28,
@@ -85,6 +113,9 @@ def main() -> None:
     model, flatten = build_model(args)
     if args.save_path is None:
         args.save_path = PROJECT_ROOT / "checkpoints" / f"mnist_{args.model}.pth"
+    if args.model == "fcn_lora":
+        base_checkpoint = torch.load(args.base_checkpoint, map_location="cpu")
+        load_base_state_dict_into_lora(model, base_checkpoint["net"])
 
     train_mnist_model(
         model=model,
@@ -111,6 +142,9 @@ def main() -> None:
             "hidden_size": args.hidden_size if args.model == "fcn" else None,
             "num_layers": args.num_layers if args.model == "fcn" else None,
             "dropout_prob": args.dropout_prob if args.model == "fcn" else None,
+            "lora_rank": args.lora_rank if args.model == "fcn_lora" else None,
+            "lora_alpha": args.lora_alpha if args.model == "fcn_lora" else None,
+            "base_checkpoint": str(args.base_checkpoint) if args.model == "fcn_lora" else None,
         },
     )
 

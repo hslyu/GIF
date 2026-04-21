@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schemes",
         nargs="+",
-        choices=["caps", "highest_k_gradients", "tracin", "hyperinf"],
+        choices=["caps", "highest_k_gradients", "tracin", "hyperinf", "datainf"],
         default=["caps"],
     )
     parser.add_argument(
@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--caps-min-curv", type=float, default=1e-12)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
+    parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument(
         "--max-iters-grid", nargs="+", type=int, default=[100, 200, 300]
     )
@@ -96,6 +97,7 @@ def build_run_namespace(
         tol=combo["tol"],
         mu=search_args.mu,
         hyperinf_beta_scale=search_args.hyperinf_beta_scale,
+        datainf_damping=search_args.datainf_damping,
         max_iter=combo["max_iter"],
         edit_scale=search_args.edit_scale,
         max_update_steps=search_args.max_update_steps,
@@ -158,7 +160,8 @@ def main() -> None:
             f"edit_scale={search_args.edit_scale} "
             f"caps_lam={search_args.caps_lam} "
             f"mu={search_args.mu} "
-            f"hyperinf_beta_scale={search_args.hyperinf_beta_scale}"
+            f"hyperinf_beta_scale={search_args.hyperinf_beta_scale} "
+            f"datainf_damping={search_args.datainf_damping}"
         )
         run_args = build_run_namespace(search_args, combo)
         run_results = run_experiment(run_args)
@@ -203,6 +206,7 @@ def main() -> None:
             f"caps_lam={search_args.caps_lam} | "
             f"mu={search_args.mu} | "
             f"hyperinf_beta_scale={search_args.hyperinf_beta_scale} | "
+            f"datainf_damping={search_args.datainf_damping} | "
             f"retain_drop={metrics['retain_acc_drop']:.2f} | "
             f"orig_retain_acc={metrics['before_retain_acc']:.2f}% | "
             f"retain_acc={metrics['retain_acc']:.2f}% | "
@@ -225,6 +229,7 @@ def main() -> None:
                 "tol_grid": search_args.tol_grid,
                 "mu": search_args.mu,
                 "hyperinf_beta_scale": search_args.hyperinf_beta_scale,
+                "datainf_damping": search_args.datainf_damping,
                 "max_iters_grid": search_args.max_iters_grid,
                 "min_retain_acc": search_args.min_retain_acc,
                 "max_retain_acc_drop": search_args.max_retain_acc_drop,

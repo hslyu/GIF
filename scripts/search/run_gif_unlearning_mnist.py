@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schemes",
         nargs="+",
-        choices=["caps", "highest_k_gradients", "tracin", "hyperinf"],
+        choices=["caps", "highest_k_gradients", "tracin", "hyperinf", "datainf"],
         default=["caps", "highest_k_gradients"],
     )
     parser.add_argument(
@@ -63,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tol", type=float, default=1e-8)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
+    parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument("--max-iter", type=int, default=30)
     parser.add_argument("--edit-scale", type=float, default=0.03)
     parser.add_argument("--max-update-steps", type=int, default=25)

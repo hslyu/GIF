@@ -9,10 +9,23 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from gif.data.mnist import MNISTDataLoader
-from gif.influence import HyperInfluence, TracIn, generalized_influence
+from gif.influence import DataInfluence, HyperInfluence, TracIn, generalized_influence
+from gif.models import trainable_parameters_to_vector, vector_to_trainable_parameters
 from gif.selection import CAPS, HighestKGradients
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class TrainableParameterSelector:
+    def __init__(self, model: torch.nn.Module):
+        self.model = model
+
+    def get_parameters(self):
+        return list(range(trainable_parameters_to_vector(self.model).numel()))
+
+    def update_network(self, update: torch.Tensor) -> None:
+        base = trainable_parameters_to_vector(self.model).detach()
+        vector_to_trainable_parameters(base + update.to(base.device, dtype=base.dtype), self.model)
 
 
 def set_seed(seed: int) -> None:
@@ -201,6 +214,10 @@ def select_parameters(
     batch_size: int,
     device: torch.device,
 ):
+    if scheme == "datainf":
+        if not hasattr(model, "lora_rank"):
+            raise RuntimeError("DataInf now requires a LoRA model. Use model=fcn_lora.")
+        return TrainableParameterSelector(model)
     if scheme == "caps":
         selector = CAPS(
             model,
@@ -251,6 +268,7 @@ def compute_method_update(
     device: torch.device,
     trajectory_dir: Path | None = None,
     hyperinf_beta_scale: float = 0.9,
+    datainf_damping: float = 1e-6,
 ) -> tuple[object, torch.Tensor]:
     model.eval()
     total_loss = build_total_loss(
@@ -287,7 +305,15 @@ def compute_method_update(
         * target_scaling
     )
 
-    if scheme == "tracin":
+    if scheme == "datainf":
+        selector = TrainableParameterSelector(model)
+        influence = DataInfluence().compute(
+            model=model,
+            total_loss=total_loss,
+            target_loss=target_loss,
+            damping=datainf_damping,
+        )
+    elif scheme == "tracin":
         if trajectory_dir is None:
             raise RuntimeError("TracIn requires a trajectory_dir.")
         influence = TracIn().compute_update(
@@ -391,6 +417,7 @@ def run_single_scheme(
         device=device,
         trajectory_dir=getattr(args, "trajectory_dir", None),
         hyperinf_beta_scale=getattr(args, "hyperinf_beta_scale", 0.9),
+        datainf_damping=getattr(args, "datainf_damping", 1e-6),
     )
 
     best_metrics = before_metrics
