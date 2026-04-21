@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Train image or text models from Hugging Face datasets."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import torch
+
+from _hf_train_common import PROJECT_ROOT, train_hf_model
+from gif.data.huggingface import create_hf_data_bundle, get_hf_dataset_spec
+from gif.models import (
+    FullyConnectedNet,
+    ResNet18,
+    ResNet34,
+    TextTransformerClassifier,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train a model from a Hugging Face dataset and save a GIF-compatible checkpoint."
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["mnist", "cifar10", "svhn", "newsgroup", "pubmed_rct20k"],
+        required=True,
+    )
+    parser.add_argument("--dataset-id", type=str, default=None)
+    parser.add_argument(
+        "--model",
+        choices=["resnet18", "resnet34", "fcn", "text_transformer"],
+        default=None,
+    )
+    parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
+    parser.add_argument("--save-path", type=Path, default=None)
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--optimizer",
+        choices=["auto", "sgd", "adamw"],
+        default="auto",
+    )
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--alpha", type=float, default=0.0)
+    parser.add_argument("--max-train-batches", type=int, default=None)
+    parser.add_argument("--max-val-batches", type=int, default=None)
+    parser.add_argument("--max-test-batches", type=int, default=None)
+    parser.add_argument(
+        "--trajectory-dir",
+        type=Path,
+        default=None,
+        help="Directory for epoch-wise trajectory checkpoints.",
+    )
+    parser.add_argument(
+        "--save-trajectory",
+        action="store_true",
+        default=True,
+        help="Save epoch-wise checkpoints for TracIn trajectory use.",
+    )
+    parser.add_argument(
+        "--no-save-trajectory",
+        dest="save_trajectory",
+        action="store_false",
+        help="Disable trajectory checkpoint saving.",
+    )
+    parser.add_argument("--hidden-size", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--dropout-prob", type=float, default=0.1)
+    parser.add_argument("--vocab-size", type=int, default=30000)
+    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--d-model", type=int, default=256)
+    parser.add_argument("--nhead", type=int, default=4)
+    parser.add_argument("--text-num-layers", type=int, default=4)
+    parser.add_argument("--dim-feedforward", type=int, default=512)
+    parser.add_argument("--max-vocab-size", type=int, default=30000)
+    parser.add_argument("--min-token-freq", type=int, default=2)
+    parser.add_argument("--grad-clip-norm", type=float, default=None)
+    return parser.parse_args()
+
+
+def resolve_default_model(dataset: str) -> str:
+    if dataset in {"newsgroup", "pubmed_rct20k"}:
+        return "text_transformer"
+    if dataset == "mnist":
+        return "fcn"
+    return "resnet18"
+
+
+def resolve_training_defaults(args: argparse.Namespace) -> None:
+    if args.model == "text_transformer":
+        if args.batch_size is None:
+            args.batch_size = 64
+        if args.optimizer == "auto":
+            args.optimizer = "adamw"
+        if args.lr is None:
+            args.lr = 3e-4
+        if args.weight_decay is None:
+            args.weight_decay = 1e-2
+        if args.grad_clip_norm is None:
+            args.grad_clip_norm = 1.0
+    else:
+        if args.batch_size is None:
+            args.batch_size = 256
+        if args.optimizer == "auto":
+            args.optimizer = "sgd"
+        if args.lr is None:
+            args.lr = 0.05
+        if args.weight_decay is None:
+            args.weight_decay = 5e-4
+
+
+def build_model(args: argparse.Namespace, bundle):
+    if args.model == "text_transformer":
+        if bundle.vocabulary is None:
+            raise ValueError("Text model requires a text dataset bundle.")
+        vocab_size = min(bundle.vocabulary.size, args.vocab_size)
+        return TextTransformerClassifier(
+            vocab_size=vocab_size,
+            max_len=args.max_text_length,
+            d_model=args.d_model,
+            nhead=args.nhead,
+            num_layers=args.text_num_layers,
+            dim_feedforward=args.dim_feedforward,
+            num_classes=bundle.num_classes,
+            dropout_prob=args.dropout_prob,
+        )
+    if args.model == "fcn":
+        input_size = bundle.in_channels * bundle.image_size * bundle.image_size
+        return FullyConnectedNet(
+            input_size=input_size,
+            hidden_size=args.hidden_size,
+            output_size=bundle.num_classes,
+            num_layers=args.num_layers,
+            dropout_prob=args.dropout_prob,
+        )
+    if args.model == "resnet18":
+        return ResNet18(in_channels=bundle.in_channels)
+    if args.model == "resnet34":
+        return ResNet34(in_channels=bundle.in_channels)
+    raise ValueError(f"Unsupported model: {args.model}")
+
+
+def main() -> None:
+    args = parse_args()
+    spec = get_hf_dataset_spec(args.dataset)
+    if args.model is None:
+        args.model = resolve_default_model(args.dataset)
+
+    if spec.task_type == "text" and args.model != "text_transformer":
+        raise ValueError("Text datasets require --model text_transformer.")
+    if spec.task_type == "image" and args.model == "text_transformer":
+        raise ValueError("Image datasets do not support --model text_transformer.")
+    resolve_training_defaults(args)
+
+    if args.save_path is None:
+        args.save_path = PROJECT_ROOT / "checkpoints" / f"hf_{args.dataset}_{args.model}.pth"
+
+    bundle = create_hf_data_bundle(
+        args.dataset,
+        data_root=args.data_root,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        validation=True,
+        flatten=args.model == "fcn",
+        seed=args.seed,
+        dataset_id=args.dataset_id,
+        max_text_length=args.max_text_length,
+        max_vocab_size=args.max_vocab_size,
+        min_token_freq=args.min_token_freq,
+    )
+    model = build_model(args, bundle)
+
+    train_hf_model(
+        model=model,
+        bundle=bundle,
+        save_path=args.save_path,
+        device=args.device,
+        seed=args.seed,
+        epochs=args.epochs,
+        optimizer_name=args.optimizer,
+        lr=args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay,
+        alpha=args.alpha,
+        max_train_batches=args.max_train_batches,
+        max_val_batches=args.max_val_batches,
+        max_test_batches=args.max_test_batches,
+        save_trajectory=args.save_trajectory,
+        trajectory_dir=args.trajectory_dir,
+        grad_clip_norm=args.grad_clip_norm,
+        meta={
+            "dataset": args.dataset,
+            "dataset_id": args.dataset_id or spec.dataset_id,
+            "model": args.model,
+            "optimizer": args.optimizer,
+            "task_type": spec.task_type,
+            "num_classes": bundle.num_classes,
+            "in_channels": bundle.in_channels,
+            "image_size": bundle.image_size,
+            "max_text_length": args.max_text_length if args.model == "text_transformer" else None,
+            "vocab_size": min(bundle.vocabulary.size, args.vocab_size)
+            if args.model == "text_transformer"
+            else None,
+            "d_model": args.d_model if args.model == "text_transformer" else None,
+            "nhead": args.nhead if args.model == "text_transformer" else None,
+            "text_num_layers": args.text_num_layers if args.model == "text_transformer" else None,
+            "dim_feedforward": args.dim_feedforward
+            if args.model == "text_transformer"
+            else None,
+        },
+    )
+
+
+if __name__ == "__main__":
+    main()

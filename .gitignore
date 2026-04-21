@@ -37,5 +37,7 @@ artifacts/
 checkpoints/
 data/
 logs/
+models/
 outputs/
 results/
+tmp/
