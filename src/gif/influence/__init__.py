@@ -6,6 +6,13 @@ from .datainf import DataInf, DataInfluence, datainf_update
 from .freezing import FreezingInfluence, freeze_influence, iphvp_fif
 from .generalized import GeneralizedInfluence, generalized_influence
 from .hypeinf import HypeInf, HyperInfluence, hyperinf_update
+from .kfac import (
+    EKFACInfluence,
+    KFACFactorCollector,
+    KFACInfluence,
+    ekfac_update,
+    kfac_update,
+)
 from .lanczos import LanczosInfluence, lanczos_update
 from .lissa import LiSSAInfluence, lissa_update
 from .projection import (
@@ -29,12 +36,15 @@ __all__ = [
     "CGInfluence",
     "DataInf",
     "DataInfluence",
+    "EKFACInfluence",
     "FreezingInfluence",
     "GeneralizedInfluence",
     "HyperInfluence",
     "HypeInf",
     "InfluenceFunction",
     "InfluenceMethod",
+    "KFACFactorCollector",
+    "KFACInfluence",
     "LanczosInfluence",
     "LiSSAInfluence",
     "SecondOrderInfluence",
@@ -50,12 +60,14 @@ __all__ = [
     "compute_hessian",
     "datainf_update",
     "embed_subset",
+    "ekfac_update",
     "freeze_influence",
     "generalized_influence",
     "hyperinf_update",
     "hvp",
     "influence",
     "iphvp_fif",
+    "kfac_update",
     "lanczos_update",
     "lissa_update",
     "plain_influence",

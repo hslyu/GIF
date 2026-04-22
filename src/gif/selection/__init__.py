@@ -7,10 +7,12 @@ from .highest_k_outputs import HighestKOutputs
 from .lowest_k_gradients import LowestKGradients
 from .lowest_k_outputs import LowestKOutputs
 from .random import Random
+from .reverse_caps import ReverseCAPS
 from .threshold import Threshold
 
 __all__ = [
     "CAPS",
+    "ReverseCAPS",
     "ExclusiveKGradients",
     "ExclusiveKOutputs",
     "HighestKGradients",
