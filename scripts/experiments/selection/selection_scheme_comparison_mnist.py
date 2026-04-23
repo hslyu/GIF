@@ -15,7 +15,7 @@ from torch import nn
 SCRIPT_ROOT = Path(__file__).resolve().parent
 EXPERIMENT_ROOT = SCRIPT_ROOT
 SEARCH_ROOT = SCRIPT_ROOT.parents[1] / "search"
-PROJECT_ROOT = SCRIPT_ROOT.parents[3]
+PROJECT_ROOT = SCRIPT_ROOT.parents[2]
 
 for path in (SEARCH_ROOT, PROJECT_ROOT):
     path_str = str(path)
@@ -29,14 +29,15 @@ from _mnist_unlearning_common import (  # noqa: E402
     evaluate_unlearning,
     format_metrics,
     load_checkpoint,
-    sample_target_batch,
     set_seed,
 )
+
 from gif.data.mnist import MNISTDataLoader  # noqa: E402
 from gif.influence import generalized_influence  # noqa: E402
 from gif.models import FullyConnectedNet, ResNet18, ResNet34  # noqa: E402
 from gif.selection import (  # noqa: E402
     CAPS,
+    EKFACCAPS,
     HighestKGradients,
     HighestKOutputs,
     LowestKGradients,
@@ -45,9 +46,9 @@ from gif.selection import (  # noqa: E402
     ReverseCAPS,
 )
 
-
 SELECTION_REGISTRY = {
     "caps": CAPS,
+    "ekfac_caps": EKFACCAPS,
     "reverse_caps": ReverseCAPS,
     "highest_k_outputs": HighestKOutputs,
     "highest_k_gradients": HighestKGradients,
@@ -61,20 +62,19 @@ GRADIENT_SELECTOR_NAMES = {
     "lowest_k_gradients",
 }
 
-CAPS_STYLE_SELECTOR_NAMES = {"caps", "reverse_caps"}
+CAPS_STYLE_SELECTOR_NAMES = {"caps", "ekfac_caps", "reverse_caps"}
 DEFAULT_PARAM_RATIOS = [
-    0.01,
-    0.05,
+    # 0.05,
     0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90,
-    1.00,
+    # 0.20,
+    # 0.30,
+    # 0.40,
+    # 0.50,
+    # 0.60,
+    # 0.70,
+    # 0.80,
+    # 0.90,
+    # 1.00,
 ]
 DEFAULT_SELECTORS = [
     "caps",
@@ -91,8 +91,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare selection schemes on a fixed generalized-influence unlearning update."
     )
-    parser.add_argument("--trial", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--num-trials", type=int, default=1)
     parser.add_argument(
         "--model",
         choices=["fcn", "resnet18", "resnet34"],
@@ -103,9 +103,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--num-target-samples", type=int, default=256)
-    parser.add_argument("--num-retain-batches", type=int, default=1)
+    parser.add_argument("--num-workers", type=int, default=16)
+    parser.add_argument("--num-target-batches", type=int, default=2)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -121,12 +120,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
-    parser.add_argument("--edit-scale", type=float, default=0.02)
-    parser.add_argument("--max-update-steps", type=int, default=40)
-    parser.add_argument("--target-self-acc", type=float, default=0.2)
-    parser.add_argument("--min-retain-acc", type=float, default=98.0)
-    parser.add_argument("--caps-lam", type=float, default=1e-5)
-    parser.add_argument("--caps-min-curv", type=float, default=1e-12)
+    parser.add_argument("--edit-scale", type=float, default=0.1)
+    parser.add_argument("--max-update-steps", type=int, default=200)
+    parser.add_argument("--target-self-acc", type=float, default=0.1)
+    parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument("--hidden-size", type=int, default=512)
     parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
@@ -166,7 +163,7 @@ def default_save_path(args: argparse.Namespace) -> Path:
         EXPERIMENT_ROOT
         / "results"
         / args.model
-        / f"trial_{args.trial:03d}_seed_{args.seed:04d}.json"
+        / f"seed_{args.seed:04d}_trials_{args.num_trials:03d}.json"
     )
 
 
@@ -188,7 +185,6 @@ def build_selector(
             model,
             ratio=ratio,
             lam=args.caps_lam,
-            min_curv=args.caps_min_curv,
         )
         target_loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(sampled_inputs, sampled_targets),
@@ -224,10 +220,23 @@ def build_selector(
     return selector
 
 
+def sample_target_batches(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    batch_size: int,
+    num_batches: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    num_samples = min(batch_size * num_batches, len(inputs))
+    permutation = torch.randperm(len(targets))[:num_samples]
+    return inputs[permutation], targets[permutation]
+
+
 def run_single_selector(
     selector_name: str,
     param_ratio: float,
     args: argparse.Namespace,
+    trial_index: int,
+    trial_seed: int,
     criterion: nn.Module,
     train_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
@@ -246,12 +255,6 @@ def run_single_selector(
 
     before_metrics = evaluate_unlearning(
         model, test_loader, criterion, args.target_label, device
-    )
-    print(
-        format_metrics(
-            f"[trial={args.trial} seed={args.seed} {selector_name} ratio={param_ratio:.3f}] Before:",
-            before_metrics,
-        )
     )
 
     total_loss = build_total_loss(
@@ -302,51 +305,63 @@ def run_single_selector(
         )
     normalized_update = influence / norm
 
-    best_metrics = before_metrics
-    best_state = deepcopy(model.state_dict())
-    best_step = 0
+    target_metrics = None
+    target_state = None
+    target_step = None
     for step in range(1, args.max_update_steps + 1):
         selector.update_network(normalized_update * args.edit_scale)
         current_metrics = evaluate_unlearning(
             model, test_loader, criterion, args.target_label, device
         )
-        if current_metrics["score"] > best_metrics["score"]:
-            best_metrics = current_metrics
-            best_state = deepcopy(model.state_dict())
-            best_step = step
-        if (
-            current_metrics["retain_acc"] < args.min_retain_acc
-            or current_metrics["self_acc"] < args.target_self_acc
-        ):
+        if current_metrics["self_acc"] <= args.target_self_acc:
+            target_metrics = current_metrics
+            target_state = deepcopy(model.state_dict())
+            target_step = step
             break
 
-    model.load_state_dict(best_state)
-    best_metrics = {
-        **best_metrics,
-        "trial": args.trial,
-        "seed": args.seed,
+    reached_target = target_metrics is not None
+    if reached_target:
+        model.load_state_dict(target_state)
+        selected_metrics = target_metrics
+    else:
+        selected_metrics = evaluate_unlearning(
+            model, test_loader, criterion, args.target_label, device
+        )
+
+    retain_acc = selected_metrics["retain_acc"]
+    self_acc = selected_metrics["self_acc"]
+    selected_metrics = {
+        **selected_metrics,
+        "seed": trial_seed,
         "selector": selector_name,
         "param_ratio": param_ratio,
         "selected_params": int(len(index_list)),
-        "best_step": best_step,
+        "reached_target": reached_target,
+        "target_step": target_step,
+        "target_self_acc_threshold": args.target_self_acc,
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
         "before_score": before_metrics["score"],
-        "retain_acc_drop": before_metrics["retain_acc"] - best_metrics["retain_acc"],
-        "self_acc_drop": before_metrics["self_acc"] - best_metrics["self_acc"],
+        "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
+        "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
+    status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[trial={args.trial} seed={args.seed} {selector_name} ratio={param_ratio:.3f}] Best:",
-            best_metrics,
+            f"[trial={trial_index} seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
+            selected_metrics,
         )
     )
-    return best_metrics
+    return selected_metrics
 
 
-def main() -> None:
-    args = parse_args()
-    set_seed(args.seed)
+def run_single_trial(
+    args: argparse.Namespace,
+    trial_index: int,
+    trial_seed: int,
+    save_dir: Path,
+) -> dict[str, object]:
+    set_seed(trial_seed)
     device = torch.device(args.device)
 
     model, flatten = build_model(args)
@@ -367,15 +382,16 @@ def main() -> None:
     all_target_inputs, all_target_targets = collect_target_examples(
         test_loader, args.target_label
     )
-    sampled_inputs, sampled_targets = sample_target_batch(
+    sampled_inputs, sampled_targets = sample_target_batches(
         all_target_inputs,
         all_target_targets,
-        args.num_target_samples,
+        args.batch_size,
+        args.num_target_batches,
     )
     retained_inputs, retained_targets = collect_retained_examples(
         test_loader,
         args.target_label,
-        args.num_retain_batches,
+        1,
     )
 
     results: list[dict[str, float]] = []
@@ -385,6 +401,8 @@ def main() -> None:
                 selector_name=selector_name,
                 param_ratio=param_ratio,
                 args=args,
+                trial_index=trial_index,
+                trial_seed=trial_seed,
                 criterion=criterion,
                 train_loader=train_loader,
                 test_loader=test_loader,
@@ -401,9 +419,9 @@ def main() -> None:
     ranked = sorted(
         results,
         key=lambda item: (
-            item["score"],
-            -item["retain_acc_drop"],
-            item["self_acc_drop"],
+            item["reached_target"],
+            item["retain_acc"],
+            -item["target_step"] if item["target_step"] is not None else float("-inf"),
         ),
         reverse=True,
     )
@@ -412,19 +430,17 @@ def main() -> None:
     for row in ranked[: min(10, len(ranked))]:
         print(
             f"{row['selector']:>22} | ratio={row['param_ratio']:.3f} | "
+            f"reached_target={int(row['reached_target'])} | "
             f"retain_acc={row['retain_acc']:.2f}% | "
             f"self_acc={row['self_acc']:.2f}% | "
-            f"score={row['score']:.4f} | "
+            f"target_step={row['target_step']} | "
             f"selected={row['selected_params']} | "
             f"trial={row['trial']} | seed={row['seed']}"
         )
 
-    save_path = args.save_json or default_save_path(args)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, object] = {
         "config": {
-            "trial": args.trial,
-            "seed": args.seed,
+            "seed": trial_seed,
             "model": args.model,
             "checkpoint": str(build_checkpoint_path(args)),
             "target_label": args.target_label,
@@ -435,14 +451,57 @@ def main() -> None:
             "max_iter": args.max_iter,
             "edit_scale": args.edit_scale,
             "max_update_steps": args.max_update_steps,
-            "num_target_samples": args.num_target_samples,
-            "num_retain_batches": args.num_retain_batches,
+            "num_target_batches": args.num_target_batches,
             "device": args.device,
         },
         "results": ranked,
     }
-    save_path.write_text(json.dumps(payload, indent=2))
-    print(f"Saved results to {save_path}")
+    trial_path = save_dir / f"seed_{trial_seed:04d}.json"
+    trial_path.parent.mkdir(parents=True, exist_ok=True)
+    trial_path.write_text(json.dumps(payload, indent=2))
+    print(f"Saved results to {trial_path}")
+    return payload
+
+
+def main() -> None:
+    args = parse_args()
+    if args.num_trials <= 0:
+        raise ValueError("--num-trials must be positive.")
+
+    set_seed(args.seed)
+    device = torch.device(args.device)
+    base_model, flatten = build_model(args)
+    base_model = base_model.to(device)
+    load_checkpoint(base_model, build_checkpoint_path(args), device)
+    base_model.eval()
+    base_criterion = nn.CrossEntropyLoss()
+    base_data_loader = MNISTDataLoader(
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        validation=False,
+        flatten=flatten,
+        root=str(args.data_root),
+    )
+    _, base_test_loader = base_data_loader.get_data_loaders()
+    base_before_metrics = evaluate_unlearning(
+        base_model, base_test_loader, base_criterion, args.target_label, device
+    )
+    print(format_metrics("[global] Before:", base_before_metrics))
+
+    save_root = EXPERIMENT_ROOT / "results" / args.model
+    aggregate_runs: list[dict[str, object]] = []
+    for trial_index in range(args.num_trials):
+        trial_seed = args.seed + trial_index
+        aggregate_runs.append(
+            run_single_trial(
+                args=args,
+                trial_index=trial_index,
+                trial_seed=trial_seed,
+                save_dir=save_root,
+            )
+        )
+
+    del aggregate_runs
 
 
 if __name__ == "__main__":
