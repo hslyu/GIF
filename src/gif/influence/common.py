@@ -5,11 +5,12 @@ def compute_gradient(
     model: torch.nn.Module,
     loss: torch.Tensor,
     create_graph: bool = False,
+    retain_graph: bool = True,
 ) -> torch.Tensor:
     grads = torch.autograd.grad(
         loss,
         list(model.parameters()),
-        retain_graph=True,
+        retain_graph=retain_graph,
         create_graph=create_graph,
     )
     return torch.cat([gradient.contiguous().view(-1) for gradient in grads])

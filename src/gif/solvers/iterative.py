@@ -89,19 +89,9 @@ def p_lissa(
     max_restarts: int = 8,
     verbose: bool = False,
 ) -> torch.Tensor:
-    STABLE_PATIENCE = 2
-    BAD_PATIENCE = 2
-    STALL_WINDOW = 8
-    MIN_PROGRESS = 1e-3
-    BLOWUP_FACTOR = 5.0
-    X_BLOWUP = 1e4
-    EPS = 1e-12
-
     full_dim = g_full.numel()
     idx = _as_index_tensor(index_list, g_full.device)
-
     rhs = _project_subset(hvp(model, loss, g_full), idx)
-    rhs_norm = torch.linalg.norm(rhs).item() + EPS
 
     def A_times(x_sub: torch.Tensor) -> torch.Tensor:
         x_full = _embed_subset(x_sub, idx, full_dim)
@@ -110,12 +100,45 @@ def p_lissa(
             idx,
         )
 
-    lam_max_hat = _estimate_lmax_power(
-        A_times=A_times,
-        dim=idx.numel(),
-        device=g_full.device,
-        dtype=g_full.dtype,
+    return p_lissa_inverse(
+        a_times=A_times,
+        rhs=rhs,
+        mu=mu,
+        tol=tol,
+        max_iter=max_iter,
+        max_restarts=max_restarts,
+        verbose=verbose,
     )
+
+
+def p_lissa_inverse(
+    a_times,
+    rhs: torch.Tensor,
+    mu: float = 1.0,
+    tol: float = 1e-6,
+    max_iter: int = 200,
+    max_restarts: int = 8,
+    power_iter_steps: int = 6,
+    verbose: bool = False,
+) -> torch.Tensor:
+    STABLE_PATIENCE = 2
+    BAD_PATIENCE = 2
+    STALL_WINDOW = 8
+    MIN_PROGRESS = 1e-3
+    BLOWUP_FACTOR = 5.0
+    X_BLOWUP = 1e4
+    EPS = 1e-12
+
+    rhs_norm = torch.linalg.norm(rhs).item() + EPS
+    lam_max_hat = None
+    if power_iter_steps > 0:
+        lam_max_hat = _estimate_lmax_power(
+            A_times=a_times,
+            dim=rhs.numel(),
+            device=rhs.device,
+            dtype=rhs.dtype,
+            num_iter=power_iter_steps,
+        )
     if lam_max_hat is not None:
         mu = min(mu, 0.9 / max(lam_max_hat, EPS))
 
@@ -125,7 +148,6 @@ def p_lissa(
     for restart in range(max_restarts):
         x = mu * rhs.clone()
         x0_norm = torch.linalg.norm(x).item()
-
         ema_residual = None
         best_ema = float("inf")
         stable_hits = 0
@@ -133,7 +155,7 @@ def p_lissa(
         recent_ema = []
 
         for t in range(max_iter):
-            Ax = A_times(x)
+            Ax = a_times(x)
             r = rhs - Ax
             step = mu * r
             x_next = x + step

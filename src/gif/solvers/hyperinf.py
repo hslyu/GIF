@@ -23,6 +23,7 @@ def hyperinf_inverse(
     beta_scale: float = 0.9,
     tol: float = 1e-6,
     max_iter: int = 6,
+    power_iter_steps: int = 6,
     return_details: bool = False,
     verbose: bool = False,
 ):
@@ -55,6 +56,7 @@ def hyperinf_inverse(
         dim=rhs.numel(),
         device=device,
         dtype=dtype,
+        num_iter=power_iter_steps,
     )
     if lam_max_hat is None or not math.isfinite(lam_max_hat) or lam_max_hat <= 0:
         raise RuntimeError("HyperINF failed to estimate a positive spectral scale.")

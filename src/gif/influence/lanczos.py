@@ -20,7 +20,7 @@ def lanczos_update(
     max_iter: int = 20,
     return_details: bool = False,
 ):
-    g_full = compute_gradient(model, target_loss)
+    g_full = compute_gradient(model, target_loss, retain_graph=False)
     rhs, a_times = build_restricted_system(model, total_loss, g_full, index_list)
     result = lanczos_inverse(
         a_times=a_times,

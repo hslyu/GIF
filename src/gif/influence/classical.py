@@ -13,7 +13,7 @@ def influence(
     max_iter: int = 200,
     verbose: bool = False,
 ) -> torch.Tensor:
-    gradient = compute_gradient(model, loss)
+    gradient = compute_gradient(model, loss, retain_graph=False)
     return ihvp(
         model=model,
         loss=total_loss,

@@ -16,7 +16,7 @@ def generalized_influence(
     max_restarts: int = 8,
     verbose: bool = False,
 ) -> torch.Tensor:
-    g_full = compute_gradient(model, target_loss)
+    g_full = compute_gradient(model, target_loss, retain_graph=False)
     return p_lissa(
         model=model,
         loss=total_loss,

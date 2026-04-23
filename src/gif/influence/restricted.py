@@ -25,3 +25,19 @@ def build_restricted_system(
         )
 
     return rhs, a_times
+
+
+def build_restricted_system_from_hvp(
+    hvp_fn,
+    g_full: torch.Tensor,
+    index_list: np.ndarray | torch.Tensor,
+) -> tuple[torch.Tensor, callable]:
+    full_dim = g_full.numel()
+    idx = as_index_tensor(index_list, g_full.device)
+    rhs = project_subset(hvp_fn(g_full), idx)
+
+    def a_times(x_sub: torch.Tensor) -> torch.Tensor:
+        x_full = embed_subset(x_sub, idx, full_dim)
+        return project_subset(hvp_fn(hvp_fn(x_full)), idx)
+
+    return rhs, a_times

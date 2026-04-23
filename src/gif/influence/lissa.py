@@ -22,7 +22,7 @@ def lissa_update(
     return_details: bool = False,
     verbose: bool = False,
 ):
-    g_full = compute_gradient(model, target_loss)
+    g_full = compute_gradient(model, target_loss, retain_graph=False)
     rhs, a_times = build_restricted_system(model, total_loss, g_full, index_list)
     result = lissa_inverse(
         a_times=a_times,

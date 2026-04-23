@@ -19,6 +19,7 @@ def lissa_inverse(
     tol: float = 1e-6,
     max_iter: int = 200,
     max_restarts: int = 8,
+    power_iter_steps: int = 6,
     return_details: bool = False,
     verbose: bool = False,
 ):
@@ -63,12 +64,15 @@ def lissa_inverse(
             out = out + damping * value
         return out
 
-    lam_max_hat = _estimate_lmax_power(
-        A_times=apply_operator,
-        dim=rhs.numel(),
-        device=rhs.device,
-        dtype=rhs.dtype,
-    )
+    lam_max_hat = None
+    if power_iter_steps > 0:
+        lam_max_hat = _estimate_lmax_power(
+            A_times=apply_operator,
+            dim=rhs.numel(),
+            device=rhs.device,
+            dtype=rhs.dtype,
+            num_iter=power_iter_steps,
+        )
     if lam_max_hat is not None:
         mu = min(mu, 0.9 / max(lam_max_hat, eps))
 
