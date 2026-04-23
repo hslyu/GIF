@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark influence-based model editing schemes on CIFAR-10 ResNet18."""
+"""Shared influence benchmark runner for text transformer models."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
 EXPERIMENT_ROOT = SCRIPT_ROOT
@@ -24,17 +23,16 @@ for path in (SEARCH_ROOT, PROJECT_ROOT):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
-from _mnist_unlearning_common import (  # noqa: E402
-    TrainableParameterSelector,
+from _hf_text_unlearning_common import (  # noqa: E402
+    build_loader,
     build_total_loss,
+    collect_examples,
     collect_retained_examples,
     collect_target_examples,
-    evaluate_unlearning,
     format_metrics,
     load_checkpoint,
     set_seed,
 )
-
 from gif.data.huggingface import create_hf_data_bundle  # noqa: E402
 from gif.influence import (  # noqa: E402
     DataInfluence,
@@ -46,7 +44,11 @@ from gif.influence import (  # noqa: E402
 )
 from gif.influence.common import compute_gradient  # noqa: E402
 from gif.influence.restricted import build_restricted_system_from_hvp  # noqa: E402
-from gif.models import ResNet18  # noqa: E402
+from gif.models import (  # noqa: E402
+    TextTransformerClassifier,
+    trainable_parameters_to_vector,
+    vector_to_trainable_parameters,
+)
 from gif.selection import HighestKGradients  # noqa: E402
 from gif.solvers import hyperinf_inverse, lissa_inverse, p_lissa_inverse  # noqa: E402
 
@@ -80,29 +82,39 @@ DEFAULT_METHODS = [
     "gif",
 ]
 DEFAULT_PARAM_RATIOS = [0.05]
-DEFAULT_TRAJECTORY_DIR = PROJECT_ROOT / "checkpoints" / "hf_cifar10_resnet18"
 
 
-def parse_args() -> argparse.Namespace:
+class TrainableParameterSelector:
+    def __init__(self, model: torch.nn.Module):
+        self.model = model
+
+    def get_parameters(self):
+        return list(range(trainable_parameters_to_vector(self.model).numel()))
+
+    def update_network(self, update: torch.Tensor) -> None:
+        base = trainable_parameters_to_vector(self.model).detach()
+        vector_to_trainable_parameters(
+            base + update.to(base.device, dtype=base.dtype),
+            self.model,
+        )
+
+
+def parse_args(default_checkpoint: Path, default_target_label: int) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark influence-based model edit schemes on CIFAR-10 ResNet18."
+        description="Benchmark influence-based model edit schemes on a text transformer."
     )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--num-trials", type=int, default=1)
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_cifar10_resnet18.pth",
-    )
+    parser.add_argument("--checkpoint", type=Path, default=default_checkpoint)
     parser.add_argument("--trajectory-dir", type=Path, default=None)
     parser.add_argument("--tracin-max-checkpoints", type=int, default=10)
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--target-label", type=int, default=0)
+    parser.add_argument("--target-label", type=int, default=default_target_label)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--num-workers", type=int, default=16)
-    parser.add_argument("--num-target-batches", type=int, default=10)
+    parser.add_argument("--num-workers", type=int, default=12)
+    parser.add_argument("--num-target-batches", type=int, default=2)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -115,12 +127,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_PARAM_RATIOS,
     )
-    parser.add_argument("--tol", type=float, default=1e-5)
+    parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--hypeinf-max-iter", type=int, default=5)
     parser.add_argument("--solver-power-iters", type=int, default=2)
-    parser.add_argument("--edit-scale", type=float, default=0.01)
+    parser.add_argument("--edit-scale", type=float, default=0.1)
     parser.add_argument("--max-update-steps", type=int, default=200)
     parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=1.5)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
@@ -129,6 +141,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lissa-damping", type=float, default=1e-2)
     parser.add_argument("--lissa-mu-scale", type=float, default=2.0)
     parser.add_argument("--lissa-max-restarts", type=int, default=12)
+    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--max-vocab-size", type=int, default=30000)
+    parser.add_argument("--min-token-freq", type=int, default=2)
+    parser.add_argument("--d-model", type=int, default=256)
+    parser.add_argument("--nhead", type=int, default=4)
+    parser.add_argument("--text-num-layers", type=int, default=4)
+    parser.add_argument("--dim-feedforward", type=int, default=512)
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -137,8 +156,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_model() -> nn.Module:
-    return ResNet18(in_channels=3)
+def build_model(bundle, args: argparse.Namespace) -> nn.Module:
+    return TextTransformerClassifier(
+        vocab_size=min(bundle.vocabulary.size, args.max_vocab_size),
+        max_len=args.max_text_length,
+        d_model=args.d_model,
+        nhead=args.nhead,
+        num_layers=args.text_num_layers,
+        dim_feedforward=args.dim_feedforward,
+        num_classes=bundle.num_classes,
+    )
 
 
 def build_retrained_checkpoint_path(args: argparse.Namespace) -> Path:
@@ -151,93 +178,62 @@ def build_retrained_checkpoint_path(args: argparse.Namespace) -> Path:
 def build_trajectory_path(args: argparse.Namespace) -> Path | None:
     if args.trajectory_dir is not None:
         return args.trajectory_dir
-    if DEFAULT_TRAJECTORY_DIR.is_dir():
-        return DEFAULT_TRAJECTORY_DIR
     candidate = args.checkpoint.parent / args.checkpoint.stem
     if candidate.is_dir():
         return candidate
     return None
 
 
-def _move_tensor(
-    tensor: torch.Tensor,
-    device: torch.device,
-    *,
-    non_blocking: bool = True,
-) -> torch.Tensor:
-    if tensor.device == device:
-        return tensor
-    return tensor.to(device, non_blocking=non_blocking)
-
-
-def build_cached_loader(
-    inputs: torch.Tensor,
+def sample_target_batches(
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
     targets: torch.Tensor,
     batch_size: int,
-) -> DataLoader:
-    return DataLoader(
-        TensorDataset(inputs, targets),
-        batch_size=min(batch_size, len(inputs)),
-        shuffle=False,
-        pin_memory=inputs.device.type == "cpu",
+    num_batches: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    num_samples = min(batch_size * num_batches, len(targets))
+    permutation = torch.randperm(len(targets))[:num_samples]
+    return (
+        input_ids[permutation],
+        attention_masks[permutation],
+        targets[permutation],
     )
 
 
 def sample_hvp_batch(
-    inputs: torch.Tensor,
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
     targets: torch.Tensor,
     batch_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if len(targets) == 0:
         raise RuntimeError("Cannot build HVP batch from an empty retained set.")
     if len(targets) <= batch_size:
-        return inputs, targets
+        return input_ids, attention_masks, targets
     permutation = torch.randperm(len(targets))[:batch_size]
-    return inputs[permutation], targets[permutation]
+    return input_ids[permutation], attention_masks[permutation], targets[permutation]
 
 
-def sample_target_batches(
-    inputs: torch.Tensor,
-    targets: torch.Tensor,
-    batch_size: int,
-    num_batches: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    num_samples = batch_size * num_batches
-    num_samples = min(num_samples, len(inputs))
-    permutation = torch.randperm(len(targets))[:num_samples]
-    return inputs[permutation], targets[permutation]
-
-
-def collect_eval_splits(
-    dataloader: torch.utils.data.DataLoader,
-    target_label: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    target_inputs = []
-    target_targets = []
-    retain_inputs = []
-    retain_targets = []
-    for inputs, targets in dataloader:
-        target_mask = targets == target_label
-        retain_mask = ~target_mask
-        if torch.any(target_mask):
-            target_inputs.append(inputs[target_mask])
-            target_targets.append(targets[target_mask])
-        if torch.any(retain_mask):
-            retain_inputs.append(inputs[retain_mask])
-            retain_targets.append(targets[retain_mask])
-    if not target_inputs or not retain_inputs:
-        raise RuntimeError("Could not build CIFAR-10 evaluation splits.")
+def collect_eval_splits(dataloader, target_label: int):
+    input_ids, attention_masks, labels = collect_examples(dataloader)
+    target_mask = labels == target_label
+    retain_mask = ~target_mask
+    if not torch.any(target_mask) or not torch.any(retain_mask):
+        raise RuntimeError("Could not build text evaluation splits.")
     return (
-        torch.cat(target_inputs, dim=0),
-        torch.cat(target_targets, dim=0),
-        torch.cat(retain_inputs, dim=0),
-        torch.cat(retain_targets, dim=0),
+        input_ids[target_mask],
+        attention_masks[target_mask],
+        labels[target_mask],
+        input_ids[retain_mask],
+        attention_masks[retain_mask],
+        labels[retain_mask],
     )
 
 
 def evaluate_split_tensors(
     model: nn.Module,
-    inputs: torch.Tensor,
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
     targets: torch.Tensor,
     criterion: nn.Module,
     device: torch.device,
@@ -247,10 +243,15 @@ def evaluate_split_tensors(
     total_correct = 0
     total_examples = 0
     with torch.inference_mode():
-        for start in range(0, len(inputs), batch_size):
-            batch_inputs = _move_tensor(inputs[start : start + batch_size], device)
-            batch_targets = _move_tensor(targets[start : start + batch_size], device)
-            outputs = model(batch_inputs)
+        for start in range(0, len(targets), batch_size):
+            ids = input_ids[start : start + batch_size].to(device, non_blocking=True)
+            masks = attention_masks[start : start + batch_size].to(
+                device, non_blocking=True
+            )
+            batch_targets = targets[start : start + batch_size].to(
+                device, non_blocking=True
+            )
+            outputs = model(ids, masks)
             loss = criterion(outputs, batch_targets)
             total_loss += loss.item() * batch_targets.size(0)
             total_correct += outputs.argmax(dim=1).eq(batch_targets).sum().item()
@@ -262,19 +263,33 @@ def evaluate_split_tensors(
 
 def evaluate_unlearning_cached(
     model: nn.Module,
-    target_inputs: torch.Tensor,
+    target_ids: torch.Tensor,
+    target_masks: torch.Tensor,
     target_targets: torch.Tensor,
-    retain_inputs: torch.Tensor,
+    retain_ids: torch.Tensor,
+    retain_masks: torch.Tensor,
     retain_targets: torch.Tensor,
     criterion: nn.Module,
     device: torch.device,
     batch_size: int,
 ) -> dict[str, float]:
     self_loss, self_acc = evaluate_split_tensors(
-        model, target_inputs, target_targets, criterion, device, batch_size
+        model,
+        target_ids,
+        target_masks,
+        target_targets,
+        criterion,
+        device,
+        batch_size,
     )
     retain_loss, retain_acc = evaluate_split_tensors(
-        model, retain_inputs, retain_targets, criterion, device, batch_size
+        model,
+        retain_ids,
+        retain_masks,
+        retain_targets,
+        criterion,
+        device,
+        batch_size,
     )
     self_acc_norm = self_acc / 100.0
     retain_acc_norm = retain_acc / 100.0
@@ -297,21 +312,23 @@ def evaluate_unlearning_cached(
 
 def make_batched_hvp_fn(
     model: nn.Module,
-    inputs: torch.Tensor,
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
     targets: torch.Tensor,
     criterion: nn.Module,
     device: torch.device,
     batch_size: int,
 ):
-    loader = build_cached_loader(inputs, targets, batch_size)
+    loader = build_loader(input_ids, attention_masks, targets, batch_size)
     total_examples = len(targets)
 
     def hvp_fn(vector: torch.Tensor) -> torch.Tensor:
         accumulated = None
-        for batch_inputs, batch_targets in loader:
-            batch_inputs = _move_tensor(batch_inputs, device)
-            batch_targets = _move_tensor(batch_targets, device)
-            batch_loss = criterion(model(batch_inputs), batch_targets)
+        for (batch_ids, batch_masks), batch_targets in loader:
+            batch_ids = batch_ids.to(device, non_blocking=True)
+            batch_masks = batch_masks.to(device, non_blocking=True)
+            batch_targets = batch_targets.to(device, non_blocking=True)
+            batch_loss = criterion(model(batch_ids, batch_masks), batch_targets)
             batch_hvp = hvp(model, batch_loss, vector)
             weight = batch_targets.size(0) / total_examples
             if accumulated is None:
@@ -319,9 +336,7 @@ def make_batched_hvp_fn(
             else:
                 accumulated.add_(batch_hvp, alpha=weight)
             del batch_loss, batch_hvp
-        if accumulated is None:
-            return torch.zeros_like(vector)
-        return accumulated
+        return accumulated if accumulated is not None else torch.zeros_like(vector)
 
     return hvp_fn
 
@@ -499,7 +514,8 @@ def compatibility_issue(
 def build_highest_gradient_selector(
     model: nn.Module,
     param_ratio: float,
-    sampled_inputs: torch.Tensor,
+    sampled_ids: torch.Tensor,
+    sampled_masks: torch.Tensor,
     sampled_targets: torch.Tensor,
     criterion: nn.Module,
     device: torch.device,
@@ -508,7 +524,8 @@ def build_highest_gradient_selector(
     selector.register_hooks()
     model.zero_grad(set_to_none=True)
     target_loss = criterion(
-        model(sampled_inputs.to(device)), sampled_targets.to(device)
+        model(sampled_ids.to(device), sampled_masks.to(device)),
+        sampled_targets.to(device),
     )
     target_loss.backward()
     selector.remove_hooks()
@@ -519,12 +536,14 @@ def build_highest_gradient_selector(
 def compute_method_update(
     method_name: str,
     model: nn.Module,
-    train_loader: torch.utils.data.DataLoader,
+    train_loader,
     criterion: nn.Module,
-    sampled_inputs: torch.Tensor,
+    sampled_ids: torch.Tensor,
+    sampled_masks: torch.Tensor,
     sampled_targets: torch.Tensor,
     all_target_count: int,
-    retained_inputs: torch.Tensor,
+    retained_ids: torch.Tensor,
+    retained_masks: torch.Tensor,
     retained_targets: torch.Tensor,
     param_ratio: float | None,
     args: argparse.Namespace,
@@ -541,14 +560,12 @@ def compute_method_update(
         selector = build_highest_gradient_selector(
             model=model,
             param_ratio=param_ratio,
-            sampled_inputs=sampled_inputs,
+            sampled_ids=sampled_ids,
+            sampled_masks=sampled_masks,
             sampled_targets=sampled_targets,
             criterion=criterion,
             device=device,
         )
-        index_list = selector.get_parameters()
-    elif method_name == "datainf":
-        selector = TrainableParameterSelector(model)
         index_list = selector.get_parameters()
     else:
         selector = TrainableParameterSelector(model)
@@ -562,17 +579,19 @@ def compute_method_update(
 
     model.zero_grad(set_to_none=True)
     target_loss = (
-        criterion(model(sampled_inputs.to(device)), sampled_targets.to(device))
+        criterion(
+            model(sampled_ids.to(device), sampled_masks.to(device)),
+            sampled_targets.to(device),
+        )
         * target_scaling
     )
-    hvp_inputs, hvp_targets = sample_hvp_batch(
-        retained_inputs,
-        retained_targets,
-        args.batch_size,
+    hvp_ids, hvp_masks, hvp_targets = sample_hvp_batch(
+        retained_ids, retained_masks, retained_targets, args.batch_size
     )
     retained_hvp_fn = make_batched_hvp_fn(
         model=model,
-        inputs=hvp_inputs,
+        input_ids=hvp_ids,
+        attention_masks=hvp_masks,
         targets=hvp_targets,
         criterion=criterion,
         device=device,
@@ -582,9 +601,9 @@ def compute_method_update(
     if method_name == "gif":
         influence = p_lissa_update_from_hvp_fn(
             model,
-            target_loss=target_loss,
-            index_list=index_list,
-            hvp_fn=retained_hvp_fn,
+            target_loss,
+            index_list,
+            retained_hvp_fn,
             mu=args.mu,
             tol=args.tol,
             max_iter=args.max_iter,
@@ -648,7 +667,7 @@ def compute_method_update(
             TracIn().compute_update(
                 model=model,
                 trajectory_dir=trajectory_dir,
-                target_inputs=sampled_inputs.to(device),
+                target_inputs=(sampled_ids.to(device), sampled_masks.to(device)),
                 target_targets=sampled_targets.to(device),
                 criterion=criterion,
                 device=device,
@@ -670,7 +689,7 @@ def compute_method_update(
         )
     elif method_name == "datainf":
         total_loss = build_total_loss(
-            model, retained_inputs, retained_targets, criterion, device
+            model, retained_ids, retained_masks, retained_targets, criterion, device
         )
         influence = DataInfluence().compute(
             model=model,
@@ -692,9 +711,9 @@ def compute_method_update(
         influence = project_subset(
             EKFACInfluence().compute(
                 model=model,
-                retained_inputs=retained_inputs,
+                retained_inputs=(retained_ids, retained_masks),
                 retained_targets=retained_targets,
-                target_inputs=sampled_inputs,
+                target_inputs=(sampled_ids, sampled_masks),
                 target_targets=sampled_targets,
                 criterion=criterion,
                 damping=args.ekfac_damping,
@@ -746,41 +765,10 @@ def format_trial_prefix(trial_seed: int, method_name: str) -> str:
     return f"[seed={trial_seed} | {method_name:<16}]"
 
 
-def evaluate_retrained_baseline(
-    args: argparse.Namespace,
-    criterion: nn.Module,
-    eval_target_inputs: torch.Tensor,
-    eval_target_targets: torch.Tensor,
-    eval_retain_inputs: torch.Tensor,
-    eval_retain_targets: torch.Tensor,
-    device: torch.device,
-) -> dict[str, object]:
-    retrained_checkpoint = build_retrained_checkpoint_path(args)
-    if not retrained_checkpoint.is_file():
-        raise FileNotFoundError(
-            "Retrained checkpoint not found: "
-            f"{retrained_checkpoint}. "
-            f"Expected a target-label-removed retraining checkpoint for "
-            f"target_label={args.target_label}."
-        )
-
-    retrained_model = build_model().to(device)
-    load_checkpoint(retrained_model, retrained_checkpoint, device)
-    retrained_model.eval()
-    metrics = evaluate_unlearning_cached(
-        retrained_model,
-        eval_target_inputs,
-        eval_target_targets,
-        eval_retain_inputs,
-        eval_retain_targets,
-        criterion,
-        device,
-        args.batch_size,
-    )
-    return {
-        "checkpoint": str(retrained_checkpoint),
-        "metrics": metrics,
-    }
+def method_param_ratios(method_name: str, args: argparse.Namespace) -> list[float | None]:
+    if METHOD_SPECS[method_name]["uses_param_ratio"]:
+        return list(args.param_ratios)
+    return [None]
 
 
 def run_single_method(
@@ -789,29 +777,36 @@ def run_single_method(
     args: argparse.Namespace,
     trial_seed: int,
     criterion: nn.Module,
-    train_loader: torch.utils.data.DataLoader,
-    sampled_inputs: torch.Tensor,
+    train_loader,
+    sampled_ids: torch.Tensor,
+    sampled_masks: torch.Tensor,
     sampled_targets: torch.Tensor,
     all_target_count: int,
-    retained_inputs: torch.Tensor,
+    retained_ids: torch.Tensor,
+    retained_masks: torch.Tensor,
     retained_targets: torch.Tensor,
-    eval_target_inputs: torch.Tensor,
+    eval_target_ids: torch.Tensor,
+    eval_target_masks: torch.Tensor,
     eval_target_targets: torch.Tensor,
-    eval_retain_inputs: torch.Tensor,
+    eval_retain_ids: torch.Tensor,
+    eval_retain_masks: torch.Tensor,
     eval_retain_targets: torch.Tensor,
     base_state_dict: dict[str, torch.Tensor],
+    model_factory,
     device: torch.device,
     trajectory_dir: Path | None,
 ) -> dict[str, object]:
-    model = build_model().to(device)
+    model = model_factory().to(device)
     model.load_state_dict(base_state_dict)
     model.eval()
 
     before_metrics = evaluate_unlearning_cached(
         model,
-        eval_target_inputs,
+        eval_target_ids,
+        eval_target_masks,
         eval_target_targets,
-        eval_retain_inputs,
+        eval_retain_ids,
+        eval_retain_masks,
         eval_retain_targets,
         criterion,
         device,
@@ -821,8 +816,8 @@ def run_single_method(
     reason = compatibility_issue(method_name, model, trajectory_dir)
     if reason is not None:
         if args.strict:
-            raise RuntimeError(f"{method_name}: {reason}")
-        metrics = build_skipped_result(
+            raise RuntimeError(reason)
+        result = build_skipped_result(
             method_name=method_name,
             param_ratio=param_ratio,
             trial_seed=trial_seed,
@@ -830,17 +825,19 @@ def run_single_method(
             reason=reason,
         )
         print(f"{format_trial_prefix(trial_seed, method_name)} Skipped: {reason}")
-        return metrics
+        return result
 
     selector, normalized_update, selected_params = compute_method_update(
         method_name=method_name,
         model=model,
         train_loader=train_loader,
         criterion=criterion,
-        sampled_inputs=sampled_inputs,
+        sampled_ids=sampled_ids,
+        sampled_masks=sampled_masks,
         sampled_targets=sampled_targets,
         all_target_count=all_target_count,
-        retained_inputs=retained_inputs,
+        retained_ids=retained_ids,
+        retained_masks=retained_masks,
         retained_targets=retained_targets,
         param_ratio=param_ratio,
         args=args,
@@ -848,53 +845,42 @@ def run_single_method(
     )
 
     best_metrics = before_metrics
-    best_state = deepcopy(model.state_dict())
+    best_state_dict = deepcopy(model.state_dict())
     best_step = 0
-    best_constrained_metrics = None
-    best_constrained_state = None
-    best_constrained_step = None
-    reached_zero_self_acc = False
-    zero_self_acc_step = None
-    for step in range(1, args.max_update_steps + 1):
+    target_step = None
+
+    selected_metrics = before_metrics
+    for step_index in range(1, args.max_update_steps + 1):
         selector.update_network(normalized_update * args.edit_scale)
         current_metrics = evaluate_unlearning_cached(
             model,
-            eval_target_inputs,
+            eval_target_ids,
+            eval_target_masks,
             eval_target_targets,
-            eval_retain_inputs,
+            eval_retain_ids,
+            eval_retain_masks,
             eval_retain_targets,
             criterion,
             device,
             args.batch_size,
         )
-        if current_metrics["score"] > best_metrics["score"]:
+        if target_step is None and current_metrics["self_acc"] <= 0.0:
+            target_step = step_index
+
+        eligible = True
+        if method_name == "gif":
+            eligible = current_metrics["self_acc"] < args.gif_max_self_acc_for_selection
+        if eligible and current_metrics["score"] >= best_metrics["score"]:
             best_metrics = current_metrics
-            best_state = deepcopy(model.state_dict())
-            best_step = step
-        if (
-            method_name == "gif"
-            and current_metrics["self_acc"] < args.gif_max_self_acc_for_selection
-            and (
-                best_constrained_metrics is None
-                or current_metrics["score"] > best_constrained_metrics["score"]
-            )
-        ):
-            best_constrained_metrics = current_metrics
-            best_constrained_state = deepcopy(model.state_dict())
-            best_constrained_step = step
+            best_state_dict = deepcopy(model.state_dict())
+            best_step = step_index
         if current_metrics["self_acc"] <= 0.0:
-            reached_zero_self_acc = True
-            zero_self_acc_step = step
             break
+        selected_metrics = current_metrics
 
-    if method_name == "gif" and best_constrained_metrics is not None:
-        model.load_state_dict(best_constrained_state)
-        selected_metrics = best_constrained_metrics
-        best_step = best_constrained_step
-    else:
-        model.load_state_dict(best_state)
-        selected_metrics = best_metrics
-
+    model.load_state_dict(best_state_dict)
+    reached_target = target_step is not None
+    selected_metrics = best_metrics
     result = {
         **selected_metrics,
         "seed": trial_seed,
@@ -904,63 +890,50 @@ def run_single_method(
         "status": "ok",
         "reason": None,
         "selected_params": selected_params,
-        "reached_target": reached_zero_self_acc,
-        "target_step": zero_self_acc_step,
+        "reached_target": reached_target,
+        "target_step": target_step,
         "best_step": best_step,
-        "gif_max_self_acc_for_selection": (
-            args.gif_max_self_acc_for_selection if method_name == "gif" else None
-        ),
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
         "before_score": before_metrics["score"],
-        "retain_acc_drop": before_metrics["retain_acc"]
-        - selected_metrics["retain_acc"],
+        "retain_acc_drop": before_metrics["retain_acc"] - selected_metrics["retain_acc"],
         "self_acc_drop": before_metrics["self_acc"] - selected_metrics["self_acc"],
+        "gif_max_self_acc_for_selection": (
+            args.gif_max_self_acc_for_selection if method_name == "gif" else None
+        ),
     }
-    status = "Target" if reached_zero_self_acc else "BestScore"
+    status = "Target" if reached_target else "BestScore"
     print(
         format_metrics(
-            f"{format_trial_prefix(trial_seed, method_name)} {status}:", result
+            f"{format_trial_prefix(trial_seed, method_name)} {status}:",
+            result,
         )
     )
     return result
 
 
-def method_param_ratios(
-    method_name: str, args: argparse.Namespace
-) -> list[float | None]:
-    if METHOD_SPECS[method_name]["uses_param_ratio"]:
-        return list(args.param_ratios)
-    return [None]
-
-
-def summarize_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
+def summarize_results(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     grouped: dict[tuple[str, float | None], list[dict[str, object]]] = {}
-    for row in results:
-        key = (str(row["method"]), row["param_ratio"])
-        grouped.setdefault(key, []).append(row)
+    for row in rows:
+        grouped.setdefault((row["method"], row["param_ratio"]), []).append(row)
 
     summary: list[dict[str, object]] = []
-    for (method_name, param_ratio), rows in grouped.items():
-        successful = [row for row in rows if row["status"] == "ok"]
-        skipped = [row for row in rows if row["status"] == "skipped"]
+    for (method_name, param_ratio), method_rows in grouped.items():
+        successful = [row for row in method_rows if row["status"] == "ok"]
+        skipped = [row for row in method_rows if row["status"] == "skipped"]
         summary_row: dict[str, object] = {
             "method": method_name,
             "method_label": METHOD_SPECS[method_name]["label"],
             "param_ratio": param_ratio,
-            "num_trials": len(rows),
+            "num_trials": len(method_rows),
             "num_successful": len(successful),
             "num_skipped": len(skipped),
         }
         if successful:
             summary_row.update(
                 {
-                    "mean_retain_acc": float(
-                        np.mean([row["retain_acc"] for row in successful])
-                    ),
-                    "mean_self_acc": float(
-                        np.mean([row["self_acc"] for row in successful])
-                    ),
+                    "mean_retain_acc": float(np.mean([row["retain_acc"] for row in successful])),
+                    "mean_self_acc": float(np.mean([row["self_acc"] for row in successful])),
                     "mean_score": float(np.mean([row["score"] for row in successful])),
                     "mean_retain_acc_drop": float(
                         np.mean([row["retain_acc_drop"] for row in successful])
@@ -997,8 +970,47 @@ def summarize_results(results: list[dict[str, object]]) -> list[dict[str, object
     return summary
 
 
+def evaluate_retrained_baseline(
+    args: argparse.Namespace,
+    bundle,
+    criterion: nn.Module,
+    eval_target_ids: torch.Tensor,
+    eval_target_masks: torch.Tensor,
+    eval_target_targets: torch.Tensor,
+    eval_retain_ids: torch.Tensor,
+    eval_retain_masks: torch.Tensor,
+    eval_retain_targets: torch.Tensor,
+    device: torch.device,
+) -> dict[str, object]:
+    retrained_checkpoint = build_retrained_checkpoint_path(args)
+    if not retrained_checkpoint.is_file():
+        raise FileNotFoundError(
+            "Retrained checkpoint not found: "
+            f"{retrained_checkpoint}. Expected a target-label-removed retraining checkpoint."
+        )
+
+    model = build_model(bundle, args).to(device)
+    load_checkpoint(model, retrained_checkpoint, device)
+    model.eval()
+    metrics = evaluate_unlearning_cached(
+        model,
+        eval_target_ids,
+        eval_target_masks,
+        eval_target_targets,
+        eval_retain_ids,
+        eval_retain_masks,
+        eval_retain_targets,
+        criterion,
+        device,
+        args.batch_size,
+    )
+    return {"checkpoint": str(retrained_checkpoint), "metrics": metrics}
+
+
 def run_single_trial(
     args: argparse.Namespace,
+    dataset_name: str,
+    result_dir_name: str,
     trial_seed: int,
     save_dir: Path,
     retrained_baseline: dict[str, object],
@@ -1008,42 +1020,48 @@ def run_single_trial(
     trajectory_dir = build_trajectory_path(args)
 
     bundle = create_hf_data_bundle(
-        "cifar10",
+        dataset_name,
         data_root=args.data_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         validation=True,
-        flatten=False,
         seed=trial_seed,
         dataset_id=args.dataset_id,
+        max_text_length=args.max_text_length,
+        max_vocab_size=args.max_vocab_size,
+        min_token_freq=args.min_token_freq,
     )
     criterion = nn.CrossEntropyLoss()
-    base_model = build_model().to(device)
+    base_model = build_model(bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)
     base_model.eval()
     base_state_dict = deepcopy(base_model.state_dict())
 
     train_loader = bundle.train_loader
     test_loader = bundle.test_loader
-    all_target_inputs, all_target_targets = collect_target_examples(
+    all_target_ids, all_target_masks, all_target_targets = collect_target_examples(
         test_loader, args.target_label
     )
-    sampled_inputs, sampled_targets = sample_target_batches(
-        all_target_inputs,
+    sampled_ids, sampled_masks, sampled_targets = sample_target_batches(
+        all_target_ids,
+        all_target_masks,
         all_target_targets,
         args.batch_size,
         args.num_target_batches,
     )
-    retained_inputs, retained_targets = collect_retained_examples(
+    retained_ids, retained_masks, retained_targets = collect_retained_examples(
         test_loader, args.target_label, 1
     )
     (
-        eval_target_inputs,
+        eval_target_ids,
+        eval_target_masks,
         eval_target_targets,
-        eval_retain_inputs,
+        eval_retain_ids,
+        eval_retain_masks,
         eval_retain_targets,
     ) = collect_eval_splits(test_loader, args.target_label)
 
+    model_factory = lambda: build_model(bundle, args)
     results: list[dict[str, object]] = []
     for method_name in args.methods:
         for param_ratio in method_param_ratios(method_name, args):
@@ -1055,16 +1073,21 @@ def run_single_trial(
                     trial_seed=trial_seed,
                     criterion=criterion,
                     train_loader=train_loader,
-                    sampled_inputs=sampled_inputs,
+                    sampled_ids=sampled_ids,
+                    sampled_masks=sampled_masks,
                     sampled_targets=sampled_targets,
-                    all_target_count=len(all_target_inputs),
-                    retained_inputs=retained_inputs,
+                    all_target_count=len(all_target_targets),
+                    retained_ids=retained_ids,
+                    retained_masks=retained_masks,
                     retained_targets=retained_targets,
-                    eval_target_inputs=eval_target_inputs,
+                    eval_target_ids=eval_target_ids,
+                    eval_target_masks=eval_target_masks,
                     eval_target_targets=eval_target_targets,
-                    eval_retain_inputs=eval_retain_inputs,
+                    eval_retain_ids=eval_retain_ids,
+                    eval_retain_masks=eval_retain_masks,
                     eval_retain_targets=eval_retain_targets,
                     base_state_dict=base_state_dict,
+                    model_factory=model_factory,
                     device=device,
                     trajectory_dir=trajectory_dir,
                 )
@@ -1084,18 +1107,16 @@ def run_single_trial(
     print("\nTop results")
     for row in ranked[: min(10, len(ranked))]:
         print(
-            f"{row['method']:>18} | "
-            f"status={row['status']} | reached_target={int(row['reached_target'])} | "
+            f"{row['method']:>18} | status={row['status']} | reached_target={int(row['reached_target'])} | "
             f"retain_acc={row['retain_acc']:.2f}% | self_acc={row['self_acc']:.2f}% | "
-            f"target_step={row['target_step']} | selected={row['selected_params']} | "
-            f"seed={row['seed']}"
+            f"target_step={row['target_step']} | selected={row['selected_params']} | seed={row['seed']}"
         )
 
     payload: dict[str, object] = {
         "config": {
             "seed": trial_seed,
-            "dataset": "cifar10",
-            "model": "resnet18",
+            "dataset": dataset_name,
+            "model": "text_transformer",
             "checkpoint": str(args.checkpoint),
             "retrained_checkpoint": str(retrained_baseline["checkpoint"]),
             "trajectory_dir": None if trajectory_dir is None else str(trajectory_dir),
@@ -1111,7 +1132,6 @@ def run_single_trial(
             "max_update_steps": args.max_update_steps,
             "gif_max_self_acc_for_selection": args.gif_max_self_acc_for_selection,
             "num_target_batches": args.num_target_batches,
-            "hvp_batch_size": args.batch_size,
             "device": args.device,
         },
         "retrained_baseline": retrained_baseline,
@@ -1124,41 +1144,51 @@ def run_single_trial(
     return payload
 
 
-def main() -> None:
-    args = parse_args()
+def main_for_dataset(
+    *,
+    dataset_name: str,
+    result_dir_name: str,
+    default_checkpoint: Path,
+    default_target_label: int,
+) -> None:
+    args = parse_args(default_checkpoint, default_target_label)
     if args.num_trials <= 0:
         raise ValueError("--num-trials must be positive.")
 
     set_seed(args.seed)
     device = torch.device(args.device)
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
 
     base_bundle = create_hf_data_bundle(
-        "cifar10",
+        dataset_name,
         data_root=args.data_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         validation=True,
-        flatten=False,
         seed=args.seed,
         dataset_id=args.dataset_id,
+        max_text_length=args.max_text_length,
+        max_vocab_size=args.max_vocab_size,
+        min_token_freq=args.min_token_freq,
     )
-    base_model = build_model().to(device)
+    base_model = build_model(base_bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)
     base_model.eval()
     base_criterion = nn.CrossEntropyLoss()
     (
-        base_eval_target_inputs,
+        base_eval_target_ids,
+        base_eval_target_masks,
         base_eval_target_targets,
-        base_eval_retain_inputs,
+        base_eval_retain_ids,
+        base_eval_retain_masks,
         base_eval_retain_targets,
     ) = collect_eval_splits(base_bundle.test_loader, args.target_label)
     base_before_metrics = evaluate_unlearning_cached(
         base_model,
-        base_eval_target_inputs,
+        base_eval_target_ids,
+        base_eval_target_masks,
         base_eval_target_targets,
-        base_eval_retain_inputs,
+        base_eval_retain_ids,
+        base_eval_retain_masks,
         base_eval_retain_targets,
         base_criterion,
         device,
@@ -1167,10 +1197,13 @@ def main() -> None:
     print(format_metrics("[global] Before:", base_before_metrics))
     retrained_baseline = evaluate_retrained_baseline(
         args=args,
+        bundle=base_bundle,
         criterion=base_criterion,
-        eval_target_inputs=base_eval_target_inputs,
+        eval_target_ids=base_eval_target_ids,
+        eval_target_masks=base_eval_target_masks,
         eval_target_targets=base_eval_target_targets,
-        eval_retain_inputs=base_eval_retain_inputs,
+        eval_retain_ids=base_eval_retain_ids,
+        eval_retain_masks=base_eval_retain_masks,
         eval_retain_targets=base_eval_retain_targets,
         device=device,
     )
@@ -1180,12 +1213,14 @@ def main() -> None:
     if trajectory_dir is not None:
         print(f"[global] Trajectory dir: {trajectory_dir}")
 
-    save_root = EXPERIMENT_ROOT / "results" / "cifar10_resnet18"
+    save_root = EXPERIMENT_ROOT / "results" / result_dir_name
     all_rows: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index
         payload = run_single_trial(
             args=args,
+            dataset_name=dataset_name,
+            result_dir_name=result_dir_name,
             trial_seed=trial_seed,
             save_dir=save_root,
             retrained_baseline=retrained_baseline,
@@ -1198,10 +1233,5 @@ def main() -> None:
         print(
             f"{row['method']:>18} | success={row['num_successful']}/{row['num_trials']} | "
             f"mean_retain_acc={row['mean_retain_acc']} | "
-            f"mean_self_acc={row['mean_self_acc']} | "
-            f"mean_score={row['mean_score']}"
+            f"mean_self_acc={row['mean_self_acc']} | mean_score={row['mean_score']}"
         )
-
-
-if __name__ == "__main__":
-    main()

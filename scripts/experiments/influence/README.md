@@ -6,7 +6,9 @@ Current runner:
 
 - `influence_scheme_comparison_mnist.py`
 - `influence_scheme_comparison_cifar10.py`
-- `test_svhn_vgg16.py`
+- `influence_scheme_comparison_pubmed.py`
+- `influence_scheme_comparison_newsgroup.py`
+- `influence_scheme_comparison_svhn.py`
 
 Target methods:
 
@@ -27,3 +29,5 @@ Implementation notes:
 - `datainf` applies a diagonal inverse-curvature style update over all trainable parameters.
 - `tracin` requires a trajectory directory with `epoch_*.pth` checkpoints.
 - Results are saved under `results/<model>/`.
+- Text benchmarks use the same method set on `TextTransformerClassifier` checkpoints trained by
+  `train_pubmed_rct20k_transformer.py` and `train_newsgroup_transformer.py`.

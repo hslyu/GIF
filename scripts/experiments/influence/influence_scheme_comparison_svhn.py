@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark influence-based model editing schemes on CIFAR-10 ResNet18."""
+"""Benchmark influence-based model editing schemes on SVHN VGG16."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from gif.influence import (  # noqa: E402
 )
 from gif.influence.common import compute_gradient  # noqa: E402
 from gif.influence.restricted import build_restricted_system_from_hvp  # noqa: E402
-from gif.models import ResNet18  # noqa: E402
+from gif.models import VGG16  # noqa: E402
 from gif.selection import HighestKGradients  # noqa: E402
 from gif.solvers import hyperinf_inverse, lissa_inverse, p_lissa_inverse  # noqa: E402
 
@@ -80,19 +80,19 @@ DEFAULT_METHODS = [
     "gif",
 ]
 DEFAULT_PARAM_RATIOS = [0.05]
-DEFAULT_TRAJECTORY_DIR = PROJECT_ROOT / "checkpoints" / "hf_cifar10_resnet18"
+DEFAULT_TRAJECTORY_DIR = PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark influence-based model edit schemes on CIFAR-10 ResNet18."
+        description="Benchmark influence-based model edit schemes on SVHN VGG16."
     )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--num-trials", type=int, default=1)
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_cifar10_resnet18.pth",
+        default=PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16.pth",
     )
     parser.add_argument("--trajectory-dir", type=Path, default=None)
     parser.add_argument("--tracin-max-checkpoints", type=int, default=10)
@@ -120,7 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--hypeinf-max-iter", type=int, default=5)
     parser.add_argument("--solver-power-iters", type=int, default=2)
-    parser.add_argument("--edit-scale", type=float, default=0.01)
+    parser.add_argument("--edit-scale", type=float, default=0.02)
     parser.add_argument("--max-update-steps", type=int, default=200)
     parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=1.5)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
@@ -138,7 +138,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_model() -> nn.Module:
-    return ResNet18(in_channels=3)
+    return VGG16(
+        in_channels=3,
+        num_classes=10,
+        classifier_hidden_dim=512,
+    )
 
 
 def build_retrained_checkpoint_path(args: argparse.Namespace) -> Path:
@@ -226,7 +230,7 @@ def collect_eval_splits(
             retain_inputs.append(inputs[retain_mask])
             retain_targets.append(targets[retain_mask])
     if not target_inputs or not retain_inputs:
-        raise RuntimeError("Could not build CIFAR-10 evaluation splits.")
+        raise RuntimeError("Could not build SVHN evaluation splits.")
     return (
         torch.cat(target_inputs, dim=0),
         torch.cat(target_targets, dim=0),
@@ -546,9 +550,6 @@ def compute_method_update(
             criterion=criterion,
             device=device,
         )
-        index_list = selector.get_parameters()
-    elif method_name == "datainf":
-        selector = TrainableParameterSelector(model)
         index_list = selector.get_parameters()
     else:
         selector = TrainableParameterSelector(model)
@@ -1008,7 +1009,7 @@ def run_single_trial(
     trajectory_dir = build_trajectory_path(args)
 
     bundle = create_hf_data_bundle(
-        "cifar10",
+        "svhn",
         data_root=args.data_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -1094,8 +1095,8 @@ def run_single_trial(
     payload: dict[str, object] = {
         "config": {
             "seed": trial_seed,
-            "dataset": "cifar10",
-            "model": "resnet18",
+            "dataset": "svhn",
+            "model": "vgg16",
             "checkpoint": str(args.checkpoint),
             "retrained_checkpoint": str(retrained_baseline["checkpoint"]),
             "trajectory_dir": None if trajectory_dir is None else str(trajectory_dir),
@@ -1135,7 +1136,7 @@ def main() -> None:
         torch.backends.cudnn.benchmark = True
 
     base_bundle = create_hf_data_bundle(
-        "cifar10",
+        "svhn",
         data_root=args.data_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -1180,7 +1181,7 @@ def main() -> None:
     if trajectory_dir is not None:
         print(f"[global] Trajectory dir: {trajectory_dir}")
 
-    save_root = EXPERIMENT_ROOT / "results" / "cifar10_resnet18"
+    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg16"
     all_rows: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index
