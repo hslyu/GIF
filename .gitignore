@@ -41,3 +41,4 @@ venv/
 /outputs/
 /results/
 /tmp/
+scripts/experiments/**/results/
