@@ -1,5 +1,6 @@
 from .base import Selection
 from .caps import CAPS
+from .ekfac_caps import EKFACCAPS
 from .exclusive_k_gradients import ExclusiveKGradients
 from .exclusive_k_outputs import ExclusiveKOutputs
 from .highest_k_gradients import HighestKGradients
@@ -12,6 +13,7 @@ from .threshold import Threshold
 
 __all__ = [
     "CAPS",
+    "EKFACCAPS",
     "ReverseCAPS",
     "ExclusiveKGradients",
     "ExclusiveKOutputs",
