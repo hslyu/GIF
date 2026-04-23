@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -190,6 +192,27 @@ def basic_tokenize(text: str) -> list[str]:
     return re.findall(r"\b\w+\b", text.lower())
 
 
+def _require_transformers():
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "transformers is required for pretrained text tokenizers. "
+            "Install the package with `pip install transformers`."
+        ) from exc
+    return AutoTokenizer
+
+
+def load_pretrained_tokenizer(model_name: str):
+    auto_tokenizer = _require_transformers()
+    tokenizer = auto_tokenizer.from_pretrained(model_name, use_fast=True)
+    if tokenizer.pad_token_id is None:
+        raise ValueError(
+            f"Tokenizer {model_name} does not define a pad token, which is required."
+        )
+    return tokenizer
+
+
 @dataclass
 class TextVocabulary:
     stoi: dict[str, int]
@@ -238,14 +261,18 @@ class HFTextTorchDataset(torch.utils.data.Dataset):
         self,
         dataset: Dataset,
         spec: HFDatasetSpec,
-        vocabulary: TextVocabulary,
         label_mapping: dict[object, int],
         *,
+        vocabulary: TextVocabulary | None = None,
+        tokenizer: Any | None = None,
         max_length: int = 256,
     ):
+        if (vocabulary is None) == (tokenizer is None):
+            raise ValueError("Provide exactly one of vocabulary or tokenizer.")
         self.dataset = dataset
         self.spec = spec
         self.vocabulary = vocabulary
+        self.tokenizer = tokenizer
         self.label_mapping = label_mapping
         self.max_length = max_length
 
@@ -254,20 +281,40 @@ class HFTextTorchDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         item = self.dataset[index]
-        ids = self.vocabulary.encode(item[self.spec.text_key], self.max_length)
-        if len(ids) == 0:
-            ids = [self.vocabulary.unk_idx]
-        input_ids = torch.tensor(ids, dtype=torch.long)
-        attention_mask = torch.ones(len(ids), dtype=torch.long)
+        if self.tokenizer is not None:
+            encoded = self.tokenizer(
+                item[self.spec.text_key],
+                truncation=True,
+                max_length=self.max_length,
+                padding=False,
+                return_attention_mask=True,
+            )
+            ids = encoded["input_ids"]
+            mask = encoded["attention_mask"]
+            if len(ids) == 0:
+                ids = [self.tokenizer.unk_token_id or self.tokenizer.pad_token_id]
+                mask = [1]
+            input_ids = torch.tensor(ids, dtype=torch.long)
+            attention_mask = torch.tensor(mask, dtype=torch.long)
+        else:
+            ids = self.vocabulary.encode(item[self.spec.text_key], self.max_length)
+            if len(ids) == 0:
+                ids = [self.vocabulary.unk_idx]
+            input_ids = torch.tensor(ids, dtype=torch.long)
+            attention_mask = torch.ones(len(ids), dtype=torch.long)
         label = self.label_mapping[item[self.spec.label_key]]
         return input_ids, attention_mask, label
 
 
-def text_collate_fn(batch):
+def text_collate_fn(batch, pad_token_id: int = 0):
     input_ids, attention_masks, labels = zip(*batch)
     batch_size = len(input_ids)
     max_len = max(max(ids.numel(), 1) for ids in input_ids)
-    padded_ids = torch.zeros(batch_size, max_len, dtype=torch.long)
+    padded_ids = torch.full(
+        (batch_size, max_len),
+        fill_value=pad_token_id,
+        dtype=torch.long,
+    )
     padded_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
 
     for row_idx, (ids, mask) in enumerate(zip(input_ids, attention_masks)):
@@ -277,6 +324,10 @@ def text_collate_fn(batch):
         padded_mask[row_idx, : mask.numel()] = mask
 
     return (padded_ids, padded_mask), torch.tensor(labels, dtype=torch.long)
+
+
+def make_text_collate_fn(pad_token_id: int = 0):
+    return partial(text_collate_fn, pad_token_id=pad_token_id)
 
 
 @dataclass
@@ -290,6 +341,8 @@ class HFDataBundle:
     in_channels: int | None = None
     image_size: int | None = None
     vocabulary: TextVocabulary | None = None
+    pad_token_id: int = 0
+    pretrained_text_model_name: str | None = None
 
 
 def create_hf_data_bundle(
@@ -305,6 +358,7 @@ def create_hf_data_bundle(
     max_text_length: int = 256,
     max_vocab_size: int = 30000,
     min_token_freq: int = 2,
+    pretrained_text_model_name: str | None = None,
 ) -> HFDataBundle:
     spec, train_split, val_split, test_split = load_hf_dataset_splits(
         dataset_name,
@@ -348,18 +402,30 @@ def create_hf_data_bundle(
             image_size=spec.image_size,
         )
 
-    vocabulary = build_text_vocabulary(
-        train_split,
-        spec.text_key,
-        max_vocab_size=max_vocab_size,
-        min_freq=min_token_freq,
-    )
     label_mapping = build_label_mapping(train_split, spec.label_key)
+    vocabulary = None
+    tokenizer = None
+    pad_token_id = 0
+    collate_fn = text_collate_fn
+
+    if pretrained_text_model_name is None:
+        vocabulary = build_text_vocabulary(
+            train_split,
+            spec.text_key,
+            max_vocab_size=max_vocab_size,
+            min_freq=min_token_freq,
+        )
+    else:
+        tokenizer = load_pretrained_tokenizer(pretrained_text_model_name)
+        pad_token_id = int(tokenizer.pad_token_id)
+        collate_fn = make_text_collate_fn(pad_token_id)
+
     train_dataset = HFTextTorchDataset(
         train_split,
         spec,
-        vocabulary,
         label_mapping,
+        vocabulary=vocabulary,
+        tokenizer=tokenizer,
         max_length=max_text_length,
     )
     val_dataset = (
@@ -368,16 +434,18 @@ def create_hf_data_bundle(
         else HFTextTorchDataset(
             val_split,
             spec,
-            vocabulary,
             label_mapping,
+            vocabulary=vocabulary,
+            tokenizer=tokenizer,
             max_length=max_text_length,
         )
     )
     test_dataset = HFTextTorchDataset(
         test_split,
         spec,
-        vocabulary,
         label_mapping,
+        vocabulary=vocabulary,
+        tokenizer=tokenizer,
         max_length=max_text_length,
     )
 
@@ -386,7 +454,7 @@ def create_hf_data_bundle(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        collate_fn=text_collate_fn,
+        collate_fn=collate_fn,
     )
     val_loader = (
         None
@@ -396,7 +464,7 @@ def create_hf_data_bundle(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
-            collate_fn=text_collate_fn,
+            collate_fn=collate_fn,
         )
     )
     test_loader = DataLoader(
@@ -404,7 +472,7 @@ def create_hf_data_bundle(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=text_collate_fn,
+        collate_fn=collate_fn,
     )
     return HFDataBundle(
         spec=spec,
@@ -414,4 +482,6 @@ def create_hf_data_bundle(
         flatten=False,
         num_classes=len(label_mapping),
         vocabulary=vocabulary,
+        pad_token_id=pad_token_id,
+        pretrained_text_model_name=pretrained_text_model_name,
     )

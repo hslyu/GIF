@@ -4,6 +4,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from gif.selection import CAPS, HighestKGradients
+from gif.models import VGG16
 
 
 class TinySelectionNet(nn.Module):
@@ -170,3 +171,22 @@ def test_caps_ratio_one_selects_all_supported_params_but_not_batchnorm():
 
     assert len(index_list) == _num_selectable_params(model)
     assert len(index_list) < _num_trainable_params(model)
+
+
+def test_highest_k_gradients_vgg16_backward_hooks_work_with_selector():
+    model = VGG16(in_channels=3, num_classes=10, classifier_hidden_dim=64)
+    selector = HighestKGradients(model, ratio=0.01)
+    criterion = nn.CrossEntropyLoss()
+
+    selector.register_hooks()
+    inputs = torch.randn(2, 3, 32, 32)
+    targets = torch.tensor([0, 1])
+
+    try:
+        loss = criterion(model(inputs), targets)
+        loss.backward()
+        index_list = selector.get_parameters()
+    finally:
+        selector.remove_hooks()
+
+    assert len(index_list) > 0

@@ -11,10 +11,12 @@ def test_train_hf_dataset_help_includes_text_transformer():
     )
 
     assert "text_transformer" in result.stdout
+    assert "hf_text_encoder" in result.stdout
     assert "--d-model" in result.stdout
     assert "--nhead" in result.stdout
     assert "--text-num-layers" in result.stdout
     assert "--dim-feedforward" in result.stdout
+    assert "--pretrained-text-model-name" in result.stdout
     assert "--save-trajectory" in result.stdout
 
 

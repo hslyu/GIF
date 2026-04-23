@@ -15,4 +15,5 @@ dependencies:
   - pip:
       - datasets>=2.19
       - opencv-python>=4.8
+      - transformers>=4.40
       - -e .

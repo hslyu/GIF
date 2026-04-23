@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-label", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=16)
-    parser.add_argument("--num-target-batches", type=int, default=20)
+    parser.add_argument("--num-target-batches", type=int, default=10)
     parser.add_argument("--num-hvp-batches", type=int, default=4)
     parser.add_argument(
         "--methods",

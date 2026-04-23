@@ -158,3 +158,47 @@ class TextTransformerClassifier(nn.Module):
         pooled = (x * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
         pooled = self.dropout(pooled)
         return self.classifier(pooled)
+
+
+def _require_transformers():
+    try:
+        from transformers import AutoModel
+    except ImportError as exc:
+        raise ImportError(
+            "transformers is required for pretrained text encoder models. "
+            "Install the package with `pip install transformers`."
+        ) from exc
+    return AutoModel
+
+
+class PretrainedTextEncoderClassifier(nn.Module):
+    def __init__(
+        self,
+        pretrained_model_name: str,
+        num_classes: int,
+        *,
+        dropout_prob: float = 0.1,
+    ):
+        super().__init__()
+        auto_model = _require_transformers()
+        self.pretrained_model_name = pretrained_model_name
+        self.encoder = auto_model.from_pretrained(pretrained_model_name)
+        hidden_size = int(self.encoder.config.hidden_size)
+        self.dropout = nn.Dropout(dropout_prob)
+        self.classifier = nn.Linear(hidden_size, num_classes)
+
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        outputs = self.encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+        token_features = outputs.last_hidden_state
+        mask = attention_mask.unsqueeze(-1).to(token_features.dtype)
+        pooled = (token_features * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+        pooled = self.dropout(pooled)
+        return self.classifier(pooled)

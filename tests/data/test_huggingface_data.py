@@ -37,8 +37,8 @@ def test_hf_text_dataset_builds_tokenized_examples():
     torch_dataset = HFTextTorchDataset(
         dataset,
         HF_DATASET_SPECS["newsgroup"],
-        vocabulary,
         label_mapping,
+        vocabulary=vocabulary,
         max_length=8,
     )
 
@@ -61,8 +61,8 @@ def test_text_collate_fn_pads_batch():
     torch_dataset = HFTextTorchDataset(
         dataset,
         HF_DATASET_SPECS["newsgroup"],
-        vocabulary,
         label_mapping,
+        vocabulary=vocabulary,
         max_length=8,
     )
 

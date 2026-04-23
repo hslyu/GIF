@@ -31,6 +31,7 @@ dependencies = [
   "scipy>=1.10",
   "torch>=2.2",
   "torchvision>=0.17",
+  "transformers>=4.40",
 ]
 
 [project.optional-dependencies]
