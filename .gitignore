@@ -33,11 +33,11 @@ venv/
 *.swo
 
 # Local data and outputs
-artifacts/
-checkpoints/
-data/
-logs/
-models/
-outputs/
-results/
-tmp/
+/artifacts/
+/checkpoints/
+/data/
+/logs/
+/models/
+/outputs/
+/results/
+/tmp/
