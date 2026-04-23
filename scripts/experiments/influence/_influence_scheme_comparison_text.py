@@ -33,6 +33,7 @@ from _hf_text_unlearning_common import (  # noqa: E402
     load_checkpoint,
     set_seed,
 )
+
 from gif.data.huggingface import create_hf_data_bundle  # noqa: E402
 from gif.influence import (  # noqa: E402
     DataInfluence,
@@ -99,7 +100,9 @@ class TrainableParameterSelector:
         )
 
 
-def parse_args(default_checkpoint: Path, default_target_label: int) -> argparse.Namespace:
+def parse_args(
+    default_checkpoint: Path, default_target_label: int
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark influence-based model edit schemes on a text transformer."
     )
@@ -114,7 +117,7 @@ def parse_args(default_checkpoint: Path, default_target_label: int) -> argparse.
     parser.add_argument("--target-label", type=int, default=default_target_label)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
-    parser.add_argument("--num-target-batches", type=int, default=2)
+    parser.add_argument("--num-target-batches", type=int, default=10)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -132,7 +135,7 @@ def parse_args(default_checkpoint: Path, default_target_label: int) -> argparse.
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--hypeinf-max-iter", type=int, default=5)
     parser.add_argument("--solver-power-iters", type=int, default=2)
-    parser.add_argument("--edit-scale", type=float, default=0.1)
+    parser.add_argument("--edit-scale", type=float, default=0.01)
     parser.add_argument("--max-update-steps", type=int, default=200)
     parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=1.5)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
@@ -765,7 +768,9 @@ def format_trial_prefix(trial_seed: int, method_name: str) -> str:
     return f"[seed={trial_seed} | {method_name:<16}]"
 
 
-def method_param_ratios(method_name: str, args: argparse.Namespace) -> list[float | None]:
+def method_param_ratios(
+    method_name: str, args: argparse.Namespace
+) -> list[float | None]:
     if METHOD_SPECS[method_name]["uses_param_ratio"]:
         return list(args.param_ratios)
     return [None]
@@ -896,7 +901,8 @@ def run_single_method(
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
         "before_score": before_metrics["score"],
-        "retain_acc_drop": before_metrics["retain_acc"] - selected_metrics["retain_acc"],
+        "retain_acc_drop": before_metrics["retain_acc"]
+        - selected_metrics["retain_acc"],
         "self_acc_drop": before_metrics["self_acc"] - selected_metrics["self_acc"],
         "gif_max_self_acc_for_selection": (
             args.gif_max_self_acc_for_selection if method_name == "gif" else None
@@ -932,8 +938,12 @@ def summarize_results(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         if successful:
             summary_row.update(
                 {
-                    "mean_retain_acc": float(np.mean([row["retain_acc"] for row in successful])),
-                    "mean_self_acc": float(np.mean([row["self_acc"] for row in successful])),
+                    "mean_retain_acc": float(
+                        np.mean([row["retain_acc"] for row in successful])
+                    ),
+                    "mean_self_acc": float(
+                        np.mean([row["self_acc"] for row in successful])
+                    ),
                     "mean_score": float(np.mean([row["score"] for row in successful])),
                     "mean_retain_acc_drop": float(
                         np.mean([row["retain_acc_drop"] for row in successful])
