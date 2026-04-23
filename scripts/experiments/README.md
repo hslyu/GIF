@@ -5,9 +5,18 @@ than the reusable search/train entrypoints under `scripts/search` and `scripts/t
 
 ## Experiments
 
+- `influence/`
+  - Compare influence/update schemes while keeping the MNIST edit protocol fixed.
+  - Current runner:
+    - `influence_scheme_comparison_mnist.py`
+  - Reference notebook:
+    - `GIF_reference/scripts/table2-3-IF_comparison_mnist.ipynb`
 - `selection/`
   - Compare parameter selection schemes while keeping the influence update rule fixed.
-  - Current target setup: MNIST label-removal style unlearning.
+  - Current runners:
+    - `selection_scheme_comparison_mnist.py`
+    - `selection_scheme_comparison_pubmed.py`
+  - Planned runner: `selection_scheme_comparison_cifar10.py`
   - Update rule: generalized influence on the selected parameter subset.
 
 ## Reference material
