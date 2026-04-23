@@ -11,14 +11,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
-    save_path = PROJECT_ROOT / "checkpoints" / "hf_newsgroup_text_transformer.pth"
+    save_path = PROJECT_ROOT / "checkpoints" / "hf_newsgroup_hf_text_encoder.pth"
     command = [
         "python3",
         "scripts/train/train_hf_dataset.py",
         "--dataset",
         "newsgroup",
         "--model",
-        "text_transformer",
+        "hf_text_encoder",
+        "--pretrained-text-model-name",
+        "prajjwal1/bert-tiny",
         "--save-path",
         str(save_path),
     ]

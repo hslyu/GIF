@@ -11,8 +11,10 @@ from _hf_train_common import PROJECT_ROOT, train_hf_model
 
 from gif.data.huggingface import create_hf_data_bundle, get_hf_dataset_spec
 from gif.models import (
+    VGG11,
     VGG16,
     FullyConnectedNet,
+    PretrainedTextEncoderClassifier,
     ResNet18,
     ResNet34,
     TextTransformerClassifier,
@@ -31,7 +33,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument(
         "--model",
-        choices=["resnet18", "resnet34", "vgg16", "fcn", "text_transformer"],
+        choices=[
+            "resnet18",
+            "resnet34",
+            "vgg11",
+            "vgg16",
+            "fcn",
+            "text_transformer",
+            "hf_text_encoder",
+        ],
         default=None,
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
@@ -41,9 +51,9 @@ def parse_args() -> argparse.Namespace:
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument(
         "--optimizer",
         choices=["auto", "sgd", "adamw"],
@@ -78,13 +88,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
     parser.add_argument("--vocab-size", type=int, default=30000)
-    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--max-text-length", type=int, default=256)
     parser.add_argument("--d-model", type=int, default=256)
     parser.add_argument("--nhead", type=int, default=4)
     parser.add_argument("--text-num-layers", type=int, default=4)
     parser.add_argument("--dim-feedforward", type=int, default=512)
     parser.add_argument("--max-vocab-size", type=int, default=30000)
     parser.add_argument("--min-token-freq", type=int, default=2)
+    parser.add_argument(
+        "--pretrained-text-model-name",
+        type=str,
+        default="prajjwal1/bert-tiny",
+    )
     parser.add_argument("--grad-clip-norm", type=float, default=None)
     return parser.parse_args()
 
@@ -105,6 +120,17 @@ def resolve_training_defaults(args: argparse.Namespace) -> None:
             args.optimizer = "adamw"
         if args.lr is None:
             args.lr = 3e-4
+        if args.weight_decay is None:
+            args.weight_decay = 1e-2
+        if args.grad_clip_norm is None:
+            args.grad_clip_norm = 1.0
+    elif args.model == "hf_text_encoder":
+        if args.batch_size is None:
+            args.batch_size = 32
+        if args.optimizer == "auto":
+            args.optimizer = "adamw"
+        if args.lr is None:
+            args.lr = 2e-5
         if args.weight_decay is None:
             args.weight_decay = 1e-2
         if args.grad_clip_norm is None:
@@ -135,6 +161,12 @@ def build_model(args: argparse.Namespace, bundle):
             num_classes=bundle.num_classes,
             dropout_prob=args.dropout_prob,
         )
+    if args.model == "hf_text_encoder":
+        return PretrainedTextEncoderClassifier(
+            pretrained_model_name=args.pretrained_text_model_name,
+            num_classes=bundle.num_classes,
+            dropout_prob=args.dropout_prob,
+        )
     if args.model == "fcn":
         input_size = bundle.in_channels * bundle.image_size * bundle.image_size
         return FullyConnectedNet(
@@ -148,6 +180,12 @@ def build_model(args: argparse.Namespace, bundle):
         return ResNet18(in_channels=bundle.in_channels)
     if args.model == "resnet34":
         return ResNet34(in_channels=bundle.in_channels)
+    if args.model == "vgg11":
+        return VGG11(
+            in_channels=bundle.in_channels,
+            num_classes=bundle.num_classes,
+            classifier_hidden_dim=512,
+        )
     if args.model == "vgg16":
         return VGG16(
             in_channels=bundle.in_channels,
@@ -178,10 +216,18 @@ def main() -> None:
     if args.model is None:
         args.model = resolve_default_model(args.dataset)
 
-    if spec.task_type == "text" and args.model != "text_transformer":
-        raise ValueError("Text datasets require --model text_transformer.")
-    if spec.task_type == "image" and args.model == "text_transformer":
-        raise ValueError("Image datasets do not support --model text_transformer.")
+    if spec.task_type == "text" and args.model not in {
+        "text_transformer",
+        "hf_text_encoder",
+    }:
+        raise ValueError(
+            "Text datasets require --model text_transformer or --model hf_text_encoder."
+        )
+    if spec.task_type == "image" and args.model in {
+        "text_transformer",
+        "hf_text_encoder",
+    }:
+        raise ValueError("Image datasets do not support text encoder models.")
     resolve_training_defaults(args)
     args.save_path = resolve_save_path(args)
 
@@ -197,6 +243,9 @@ def main() -> None:
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
+        ),
     )
     model = build_model(args, bundle)
 
@@ -229,7 +278,7 @@ def main() -> None:
             "in_channels": bundle.in_channels,
             "image_size": bundle.image_size,
             "max_text_length": args.max_text_length
-            if args.model == "text_transformer"
+            if args.model in {"text_transformer", "hf_text_encoder"}
             else None,
             "vocab_size": min(bundle.vocabulary.size, args.vocab_size)
             if args.model == "text_transformer"
@@ -241,6 +290,9 @@ def main() -> None:
             else None,
             "dim_feedforward": args.dim_feedforward
             if args.model == "text_transformer"
+            else None,
+            "pretrained_text_model_name": args.pretrained_text_model_name
+            if args.model == "hf_text_encoder"
             else None,
             "exclude_label": args.exclude_label,
         },

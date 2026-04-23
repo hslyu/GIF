@@ -11,14 +11,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
-    save_path = PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16.pth"
+    save_path = PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg11.pth"
     command = [
         "python3",
         "scripts/train/train_hf_dataset.py",
         "--dataset",
         "svhn",
         "--model",
-        "vgg16",
+        "vgg11",
         "--save-path",
         str(save_path),
     ]
