@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-path",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "mnist_fcn_deep.pth",
+        default=None,
     )
     parser.add_argument(
         "--trajectory-dir",
@@ -60,8 +60,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_save_path(save_path: Path | None, exclude_label: int | None) -> Path:
+    resolved = save_path or (PROJECT_ROOT / "checkpoints" / "mnist_fcn_deep.pth")
+    if exclude_label is None:
+        return resolved
+
+    suffix = f"_without_{exclude_label}"
+    if resolved.stem.endswith(suffix):
+        return resolved
+    return resolved.with_name(f"{resolved.stem}{suffix}{resolved.suffix}")
+
+
 def main() -> None:
     args = parse_args()
+    save_path = resolve_save_path(args.save_path, args.exclude_label)
     train_mnist_model(
         model=FullyConnectedNet(
             28 * 28,
@@ -70,7 +82,7 @@ def main() -> None:
             args.num_layers,
             args.dropout_prob,
         ),
-        save_path=args.save_path,
+        save_path=save_path,
         trajectory_dir=args.trajectory_dir,
         save_trajectory=args.save_trajectory,
         data_root=args.data_root,

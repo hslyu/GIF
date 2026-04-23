@@ -106,6 +106,18 @@ def trajectory_checkpoint_path(trajectory_dir: Path, epoch: int) -> Path:
     return trajectory_dir / f"epoch_{epoch:03d}.pth"
 
 
+def prune_trajectory_after_epoch(trajectory_dir: Path, best_epoch: int) -> None:
+    if not trajectory_dir.is_dir():
+        return
+    for path in trajectory_dir.glob("epoch_*.pth"):
+        try:
+            epoch = int(path.stem.split("_")[-1])
+        except ValueError:
+            continue
+        if epoch > best_epoch:
+            path.unlink()
+
+
 def train_mnist_model(
     model: nn.Module,
     save_path: Path,
@@ -231,6 +243,12 @@ def train_mnist_model(
     )
     print(f"Test train-style metric loss={test_loss:.4f} acc={test_acc:.2f}%")
     print(f"Best checkpoint saved to {save_path}")
+
+    if save_trajectory and best_metrics is not None:
+        prune_trajectory_after_epoch(
+            resolved_trajectory_dir,
+            int(best_metrics["epoch"]),
+        )
 
     return {
         "test_loss": float(test_loss),

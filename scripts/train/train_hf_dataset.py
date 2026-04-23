@@ -7,10 +7,11 @@ import argparse
 from pathlib import Path
 
 import torch
-
 from _hf_train_common import PROJECT_ROOT, train_hf_model
+
 from gif.data.huggingface import create_hf_data_bundle, get_hf_dataset_spec
 from gif.models import (
+    VGG16,
     FullyConnectedNet,
     ResNet18,
     ResNet34,
@@ -30,16 +31,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument(
         "--model",
-        choices=["resnet18", "resnet34", "fcn", "text_transformer"],
+        choices=["resnet18", "resnet34", "vgg16", "fcn", "text_transformer"],
         default=None,
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--save-path", type=Path, default=None)
+    parser.add_argument("--exclude-label", type=int, default=None)
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument(
@@ -146,7 +148,28 @@ def build_model(args: argparse.Namespace, bundle):
         return ResNet18(in_channels=bundle.in_channels)
     if args.model == "resnet34":
         return ResNet34(in_channels=bundle.in_channels)
+    if args.model == "vgg16":
+        return VGG16(
+            in_channels=bundle.in_channels,
+            num_classes=bundle.num_classes,
+            classifier_hidden_dim=512,
+        )
     raise ValueError(f"Unsupported model: {args.model}")
+
+
+def resolve_save_path(args: argparse.Namespace) -> Path:
+    if args.save_path is None:
+        resolved = PROJECT_ROOT / "checkpoints" / f"hf_{args.dataset}_{args.model}.pth"
+    else:
+        resolved = args.save_path
+
+    if args.exclude_label is None:
+        return resolved
+
+    suffix = f"_without_{args.exclude_label}"
+    if resolved.stem.endswith(suffix):
+        return resolved
+    return resolved.with_name(f"{resolved.stem}{suffix}{resolved.suffix}")
 
 
 def main() -> None:
@@ -160,9 +183,7 @@ def main() -> None:
     if spec.task_type == "image" and args.model == "text_transformer":
         raise ValueError("Image datasets do not support --model text_transformer.")
     resolve_training_defaults(args)
-
-    if args.save_path is None:
-        args.save_path = PROJECT_ROOT / "checkpoints" / f"hf_{args.dataset}_{args.model}.pth"
+    args.save_path = resolve_save_path(args)
 
     bundle = create_hf_data_bundle(
         args.dataset,
@@ -197,6 +218,7 @@ def main() -> None:
         save_trajectory=args.save_trajectory,
         trajectory_dir=args.trajectory_dir,
         grad_clip_norm=args.grad_clip_norm,
+        exclude_label=args.exclude_label,
         meta={
             "dataset": args.dataset,
             "dataset_id": args.dataset_id or spec.dataset_id,
@@ -206,16 +228,21 @@ def main() -> None:
             "num_classes": bundle.num_classes,
             "in_channels": bundle.in_channels,
             "image_size": bundle.image_size,
-            "max_text_length": args.max_text_length if args.model == "text_transformer" else None,
+            "max_text_length": args.max_text_length
+            if args.model == "text_transformer"
+            else None,
             "vocab_size": min(bundle.vocabulary.size, args.vocab_size)
             if args.model == "text_transformer"
             else None,
             "d_model": args.d_model if args.model == "text_transformer" else None,
             "nhead": args.nhead if args.model == "text_transformer" else None,
-            "text_num_layers": args.text_num_layers if args.model == "text_transformer" else None,
+            "text_num_layers": args.text_num_layers
+            if args.model == "text_transformer"
+            else None,
             "dim_feedforward": args.dim_feedforward
             if args.model == "text_transformer"
             else None,
+            "exclude_label": args.exclude_label,
         },
     )
 

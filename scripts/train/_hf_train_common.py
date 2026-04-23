@@ -31,6 +31,18 @@ def forward_model(model: nn.Module, inputs):
     return model(inputs)
 
 
+def filter_batch(inputs, targets: torch.Tensor, exclude_label: int | None):
+    if exclude_label is None:
+        return inputs, targets
+
+    mask = targets != exclude_label
+    if isinstance(inputs, (tuple, list)):
+        filtered_inputs = tuple(tensor[mask] for tensor in inputs)
+    else:
+        filtered_inputs = inputs[mask]
+    return filtered_inputs, targets[mask]
+
+
 def run_epoch(
     model: nn.Module,
     dataloader: torch.utils.data.DataLoader,
@@ -39,6 +51,7 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None,
     max_batches: int | None = None,
     grad_clip_norm: float | None = None,
+    exclude_label: int | None = None,
 ) -> tuple[float, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -52,6 +65,9 @@ def run_epoch(
             break
 
         inputs, targets = batch
+        inputs, targets = filter_batch(inputs, targets, exclude_label)
+        if targets.numel() == 0:
+            continue
         inputs = move_inputs_to_device(inputs, device)
         targets = targets.to(device)
 
@@ -108,6 +124,18 @@ def trajectory_checkpoint_path(trajectory_dir: Path, epoch: int) -> Path:
     return trajectory_dir / f"epoch_{epoch:03d}.pth"
 
 
+def prune_trajectory_after_epoch(trajectory_dir: Path, best_epoch: int) -> None:
+    if not trajectory_dir.is_dir():
+        return
+    for path in trajectory_dir.glob("epoch_*.pth"):
+        try:
+            epoch = int(path.stem.split("_")[-1])
+        except ValueError:
+            continue
+        if epoch > best_epoch:
+            path.unlink()
+
+
 def train_hf_model(
     model: nn.Module,
     bundle: HFDataBundle,
@@ -128,6 +156,7 @@ def train_hf_model(
     trajectory_dir: Path | None = None,
     grad_clip_norm: float | None = None,
     meta: dict[str, object] | None = None,
+    exclude_label: int | None = None,
 ) -> dict[str, float]:
     set_seed(seed)
     device_t = torch.device(device)
@@ -165,6 +194,7 @@ def train_hf_model(
             optimizer=optimizer,
             max_batches=max_train_batches,
             grad_clip_norm=grad_clip_norm,
+            exclude_label=exclude_label,
         )
         if bundle.val_loader is not None:
             val_loss, val_acc = run_epoch(
@@ -174,6 +204,7 @@ def train_hf_model(
                 device=device_t,
                 optimizer=None,
                 max_batches=max_val_batches,
+                exclude_label=exclude_label,
             )
         else:
             val_loss, val_acc = train_loss, train_acc
@@ -186,7 +217,12 @@ def train_hf_model(
             f"val_loss={val_loss:.4f} val_acc={val_acc:.2f}%"
         )
 
-        meta_payload = {**(meta or {}), "alpha": alpha, "lr": current_lr}
+        meta_payload = {
+            **(meta or {}),
+            "alpha": alpha,
+            "lr": current_lr,
+            "exclude_label": exclude_label,
+        }
         if save_trajectory:
             save_checkpoint(
                 model,
@@ -212,9 +248,16 @@ def train_hf_model(
         device=device_t,
         optimizer=None,
         max_batches=max_test_batches,
+        exclude_label=exclude_label,
     )
     print(f"Test train-style metric loss={test_loss:.4f} acc={test_acc:.2f}%")
     print(f"Best checkpoint saved to {save_path}")
+
+    if save_trajectory and best_metrics is not None:
+        prune_trajectory_after_epoch(
+            resolved_trajectory_dir,
+            int(best_metrics["epoch"]),
+        )
 
     return {
         "test_loss": float(test_loss),

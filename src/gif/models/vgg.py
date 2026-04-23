@@ -52,10 +52,20 @@ cfg = {
 
 
 class VGG(nn.Module):
-    def __init__(self, vgg_name):
+    def __init__(
+        self,
+        vgg_name,
+        in_channels=3,
+        num_classes=10,
+        classifier_hidden_dim=512,
+    ):
         super().__init__()
-        self.features = self._make_layers(cfg[vgg_name])
-        self.classifier = nn.Linear(512, 10)
+        self.features = self._make_layers(cfg[vgg_name], in_channels)
+        self.classifier = nn.Sequential(
+            nn.Linear(512, classifier_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(classifier_hidden_dim, num_classes),
+        )
 
     def forward(self, x):
         out = self.features(x)
@@ -63,9 +73,8 @@ class VGG(nn.Module):
         out = self.classifier(out)
         return out
 
-    def _make_layers(self, cfg):
+    def _make_layers(self, cfg, in_channels):
         layers = []
-        in_channels = 3
         for x in cfg:
             if x == "M":
                 layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
@@ -80,9 +89,19 @@ class VGG(nn.Module):
         return nn.Sequential(*layers)
 
 
-def VGG16():
-    return VGG("VGG16")
+def VGG16(in_channels=3, num_classes=10, classifier_hidden_dim=512):
+    return VGG(
+        "VGG16",
+        in_channels=in_channels,
+        num_classes=num_classes,
+        classifier_hidden_dim=classifier_hidden_dim,
+    )
 
 
-def VGG11():
-    return VGG("VGG11")
+def VGG11(in_channels=3, num_classes=10, classifier_hidden_dim=512):
+    return VGG(
+        "VGG11",
+        in_channels=in_channels,
+        num_classes=num_classes,
+        classifier_hidden_dim=classifier_hidden_dim,
+    )
