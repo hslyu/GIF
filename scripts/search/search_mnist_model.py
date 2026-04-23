@@ -67,7 +67,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=[1e-3, 1e-4, 1e-5, 1e-6],
     )
-    parser.add_argument("--caps-min-curv", type=float, default=1e-12)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
     parser.add_argument("--datainf-damping", type=float, default=1e-6)
@@ -165,7 +164,6 @@ def build_run_namespace(
         param_ratio=combo["param_ratio"],
         schemes=search_args.schemes,
         caps_lam=search_args.caps_lam,
-        caps_min_curv=search_args.caps_min_curv,
         tol=combo["tol"],
         mu=search_args.mu,
         hyperinf_beta_scale=search_args.hyperinf_beta_scale,

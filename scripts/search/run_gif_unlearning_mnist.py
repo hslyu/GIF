@@ -68,7 +68,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing epoch-wise checkpoints for TracIn.",
     )
     parser.add_argument("--caps-lam", type=float, default=1e-6)
-    parser.add_argument("--caps-min-curv", type=float, default=1e-12)
     parser.add_argument("--tol", type=float, default=1e-8)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
@@ -260,7 +259,6 @@ def select_parameters(
     target_scaling: float,
     param_ratio: float,
     caps_lam: float,
-    caps_min_curv: float,
     batch_size: int,
     device: torch.device,
 ):
@@ -268,7 +266,6 @@ def select_parameters(
         model,
         ratio=param_ratio,
         lam=caps_lam,
-        min_curv=caps_min_curv,
     )
     target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
     retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
@@ -293,7 +290,6 @@ def compute_gif_update(
     retained_targets: torch.Tensor,
     param_ratio: float,
     caps_lam: float,
-    caps_min_curv: float,
     batch_size: int,
     tol: float,
     mu: float,
@@ -319,7 +315,6 @@ def compute_gif_update(
         target_scaling=target_scaling,
         param_ratio=param_ratio,
         caps_lam=caps_lam,
-        caps_min_curv=caps_min_curv,
         batch_size=batch_size,
         device=device,
     )
@@ -473,7 +468,6 @@ def run_single_scheme(
         retained_targets=retained_targets,
         param_ratio=args.param_ratio,
         caps_lam=args.caps_lam,
-        caps_min_curv=args.caps_min_curv,
         batch_size=args.batch_size,
         tol=args.tol,
         mu=args.mu,

@@ -35,7 +35,6 @@ def parse_args():
     )
     parser.add_argument("--param-ratio", type=float, default=0.03)
     parser.add_argument("--caps-lam", type=float, default=1e-5)
-    parser.add_argument("--caps-min-curv", type=float, default=1e-12)
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)

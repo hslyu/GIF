@@ -221,19 +221,15 @@ def select_parameters(
     target_scaling: float,
     param_ratio: float,
     caps_lam: float,
-    caps_min_curv: float,
     batch_size: int,
     device: torch.device,
 ):
     if scheme == "datainf":
-        if not hasattr(model, "lora_rank"):
-            raise RuntimeError("DataInf now requires a LoRA model. Use model=fcn_lora.")
         return TrainableParameterSelector(model)
     selector = CAPS(
         model,
         ratio=param_ratio,
         lam=caps_lam,
-        min_curv=caps_min_curv,
     )
     target_loader = build_loader(sampled_inputs, sampled_targets, batch_size)
     retained_loader = build_loader(retained_inputs, retained_targets, batch_size)
@@ -258,7 +254,6 @@ def compute_method_update(
     retained_targets: torch.Tensor,
     param_ratio: float,
     caps_lam: float,
-    caps_min_curv: float,
     batch_size: int,
     tol: float,
     mu: float,
@@ -287,7 +282,6 @@ def compute_method_update(
         target_scaling=target_scaling,
         param_ratio=param_ratio,
         caps_lam=caps_lam,
-        caps_min_curv=caps_min_curv,
         batch_size=batch_size,
         device=device,
     )
@@ -473,7 +467,6 @@ def run_single_scheme(
         retained_targets=retained_targets,
         param_ratio=args.param_ratio,
         caps_lam=args.caps_lam,
-        caps_min_curv=args.caps_min_curv,
         batch_size=args.batch_size,
         tol=args.tol,
         mu=args.mu,

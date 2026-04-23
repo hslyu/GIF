@@ -70,7 +70,6 @@ def test_additional_influence_schemes_produce_finite_normalized_updates():
             retained_targets=retained_targets,
             param_ratio=0.5,
             caps_lam=1e-5,
-            caps_min_curv=1e-12,
             batch_size=4,
             tol=1e-4,
             mu=1.0,

@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.functional import pad
 
 from gif.data.huggingface import create_hf_data_bundle
 from gif.influence import (
@@ -62,9 +63,24 @@ def collect_examples(dataloader):
         ids_list.append(input_ids)
         mask_list.append(attention_mask)
         labels_list.append(labels)
+
+    if not ids_list:
+        raise RuntimeError("No text examples were collected from the dataloader.")
+
+    max_len = max(tensor.shape[1] for tensor in ids_list)
+    padded_ids = []
+    padded_masks = []
+    for input_ids, attention_mask in zip(ids_list, mask_list):
+        pad_width = max_len - input_ids.shape[1]
+        if pad_width > 0:
+            input_ids = pad(input_ids, (0, pad_width), value=0)
+            attention_mask = pad(attention_mask, (0, pad_width), value=0)
+        padded_ids.append(input_ids)
+        padded_masks.append(attention_mask)
+
     return (
-        torch.cat(ids_list, dim=0),
-        torch.cat(mask_list, dim=0),
+        torch.cat(padded_ids, dim=0),
+        torch.cat(padded_masks, dim=0),
         torch.cat(labels_list, dim=0),
     )
 
@@ -170,11 +186,10 @@ def select_parameters(
     retained_targets,
     param_ratio,
     caps_lam,
-    caps_min_curv,
     batch_size,
     device,
 ):
-    selector = CAPS(model, ratio=param_ratio, lam=caps_lam, min_curv=caps_min_curv)
+    selector = CAPS(model, ratio=param_ratio, lam=caps_lam)
     target_loader = build_loader(sampled_ids, sampled_masks, sampled_targets, batch_size)
     retained_loader = build_loader(retained_ids, retained_masks, retained_targets, batch_size)
     selector.fit(
@@ -200,7 +215,6 @@ def compute_method_update(
     retained_targets,
     param_ratio,
     caps_lam,
-    caps_min_curv,
     batch_size,
     tol,
     mu,
@@ -224,7 +238,6 @@ def compute_method_update(
         retained_targets,
         param_ratio,
         caps_lam,
-        caps_min_curv,
         batch_size,
         device,
     )
@@ -367,7 +380,6 @@ def run_experiment(args, model_factory):
             retained_targets,
             args.param_ratio,
             args.caps_lam,
-            args.caps_min_curv,
             args.batch_size,
             args.tol,
             args.mu,
