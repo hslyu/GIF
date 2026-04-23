@@ -12,7 +12,7 @@ def _compute_trainable_gradient(
 ) -> torch.Tensor:
     params = get_trainable_parameters(model)
     if not params:
-        raise RuntimeError("DataInf requires trainable LoRA adapter parameters.")
+        raise RuntimeError("DataInf requires at least one trainable parameter.")
     grads = torch.autograd.grad(loss, params, retain_graph=True)
     return torch.cat([gradient.contiguous().view(-1) for gradient in grads])
 

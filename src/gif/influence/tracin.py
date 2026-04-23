@@ -12,7 +12,36 @@ from gif.influence.projection import project_subset
 EPOCH_CHECKPOINT_PATTERN = re.compile(r"^epoch_(\d+)\.pth$")
 
 
-def load_tracin_checkpoint_paths(trajectory_dir: Path) -> list[Path]:
+def _subsample_checkpoint_paths(
+    checkpoint_paths: list[Path],
+    max_checkpoints: int | None,
+) -> list[Path]:
+    if max_checkpoints is None or max_checkpoints <= 0:
+        return checkpoint_paths
+    if len(checkpoint_paths) <= max_checkpoints:
+        return checkpoint_paths
+
+    indices = torch.linspace(
+        0,
+        len(checkpoint_paths) - 1,
+        steps=max_checkpoints,
+    )
+    selected_indices = []
+    seen = set()
+    for value in indices.tolist():
+        index = int(round(value))
+        if index in seen:
+            continue
+        seen.add(index)
+        selected_indices.append(index)
+    selected_indices.sort()
+    return [checkpoint_paths[index] for index in selected_indices]
+
+
+def load_tracin_checkpoint_paths(
+    trajectory_dir: Path,
+    max_checkpoints: int | None = None,
+) -> list[Path]:
     if not trajectory_dir.is_dir():
         raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
 
@@ -31,17 +60,24 @@ def load_tracin_checkpoint_paths(trajectory_dir: Path) -> list[Path]:
         )
 
     checkpoint_paths.sort(key=lambda item: item[0])
-    return [path for _, path in checkpoint_paths]
+    return _subsample_checkpoint_paths(
+        [path for _, path in checkpoint_paths],
+        max_checkpoints=max_checkpoints,
+    )
 
 
 def load_tracin_checkpoints(
     trajectory_dir: Path,
     device: torch.device | str = "cpu",
+    max_checkpoints: int | None = None,
 ) -> list[dict[str, object]]:
     """Load epoch checkpoints in trajectory order."""
     return [
         torch.load(path, map_location=device)
-        for path in load_tracin_checkpoint_paths(trajectory_dir)
+        for path in load_tracin_checkpoint_paths(
+            trajectory_dir,
+            max_checkpoints=max_checkpoints,
+        )
     ]
 
 
@@ -245,8 +281,13 @@ class TracIn:
         self,
         trajectory_dir: Path,
         device: torch.device | str = "cpu",
+        max_checkpoints: int | None = None,
     ) -> list[dict[str, object]]:
-        return load_tracin_checkpoints(trajectory_dir=trajectory_dir, device=device)
+        return load_tracin_checkpoints(
+            trajectory_dir=trajectory_dir,
+            device=device,
+            max_checkpoints=max_checkpoints,
+        )
 
     def compute_scores(
         self,
@@ -259,9 +300,13 @@ class TracIn:
         criterion: torch.nn.Module,
         device: torch.device | str | None = None,
         weight_by_lr: bool = True,
+        max_checkpoints: int | None = None,
         return_details: bool = False,
     ):
-        checkpoint_paths = load_tracin_checkpoint_paths(trajectory_dir)
+        checkpoint_paths = load_tracin_checkpoint_paths(
+            trajectory_dir,
+            max_checkpoints=max_checkpoints,
+        )
         return tracin_score_from_checkpoints(
             model=model,
             checkpoint_paths=checkpoint_paths,
@@ -284,10 +329,14 @@ class TracIn:
         criterion: torch.nn.Module,
         device: torch.device | str | None = None,
         weight_by_lr: bool = True,
+        max_checkpoints: int | None = None,
         index_list=None,
         return_details: bool = False,
     ):
-        checkpoint_paths = load_tracin_checkpoint_paths(trajectory_dir)
+        checkpoint_paths = load_tracin_checkpoint_paths(
+            trajectory_dir,
+            max_checkpoints=max_checkpoints,
+        )
         return tracin_update_from_checkpoints(
             model=model,
             checkpoint_paths=checkpoint_paths,

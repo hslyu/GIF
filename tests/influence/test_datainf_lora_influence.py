@@ -72,3 +72,23 @@ def test_datainf_class_api_returns_details():
     assert "update" in result
     assert "details" in result
     assert torch.isfinite(result["update"]).all()
+
+
+def test_datainf_update_supports_full_model_training():
+    torch.manual_seed(1)
+    model = FullyConnectedNet(4, 8, 3, 3, 0.0).double()
+    criterion = torch.nn.CrossEntropyLoss()
+    inputs = torch.randn(8, 4, dtype=torch.float64)
+    targets = torch.tensor([0, 1, 2, 1, 0, 2, 1, 0], dtype=torch.long)
+
+    update = datainf_update(
+        model=model,
+        total_loss=criterion(model(inputs), targets),
+        target_loss=criterion(model(inputs[:3]), targets[:3]),
+        damping=1e-6,
+    )
+
+    expected_dim = sum(parameter.numel() for parameter in model.parameters())
+    assert update.ndim == 1
+    assert update.shape[0] == expected_dim
+    assert torch.isfinite(update).all()
