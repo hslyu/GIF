@@ -83,6 +83,7 @@ def p_lissa(
     loss: torch.Tensor,
     g_full: torch.Tensor,
     index_list,
+    damping: float = 0.0,
     mu: float = 1.0,
     tol: float = 1e-6,
     max_iter: int = 200,
@@ -103,6 +104,7 @@ def p_lissa(
     return p_lissa_inverse(
         a_times=A_times,
         rhs=rhs,
+        damping=damping,
         mu=mu,
         tol=tol,
         max_iter=max_iter,
@@ -114,6 +116,7 @@ def p_lissa(
 def p_lissa_inverse(
     a_times,
     rhs: torch.Tensor,
+    damping: float = 0.0,
     mu: float = 1.0,
     tol: float = 1e-6,
     max_iter: int = 200,
@@ -129,11 +132,31 @@ def p_lissa_inverse(
     X_BLOWUP = 1e4
     EPS = 1e-12
 
+    if rhs.ndim != 1:
+        raise ValueError("rhs must be a flat 1D tensor.")
+    if rhs.numel() == 0:
+        raise ValueError("rhs must not be empty.")
+    if damping < 0:
+        raise ValueError("damping must be non-negative.")
+    if mu <= 0:
+        raise ValueError("mu must be positive.")
+    if max_iter <= 0:
+        raise ValueError("max_iter must be positive.")
+    if max_restarts <= 0:
+        raise ValueError("max_restarts must be positive.")
+
     rhs_norm = torch.linalg.norm(rhs).item() + EPS
+
+    def apply_operator(x: torch.Tensor) -> torch.Tensor:
+        out = a_times(x)
+        if damping > 0:
+            out = out + damping * x
+        return out
+
     lam_max_hat = None
     if power_iter_steps > 0:
         lam_max_hat = _estimate_lmax_power(
-            A_times=a_times,
+            A_times=apply_operator,
             dim=rhs.numel(),
             device=rhs.device,
             dtype=rhs.dtype,
@@ -155,7 +178,7 @@ def p_lissa_inverse(
         recent_ema = []
 
         for t in range(max_iter):
-            Ax = a_times(x)
+            Ax = apply_operator(x)
             r = rhs - Ax
             step = mu * r
             x_next = x + step
@@ -279,6 +302,7 @@ def iphvp(
         loss=loss,
         g_full=full_v,
         index_list=index_list,
+        damping=0.0,
         mu=mu,
         tol=tol,
         max_iter=max_iter,

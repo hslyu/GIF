@@ -65,6 +65,31 @@ def test_p_lissa_matches_oracle_restricted_solution():
     torch.testing.assert_close(approx, oracle, atol=5e-5, rtol=1e-4)
 
 
+def test_p_lissa_matches_damped_oracle_restricted_solution():
+    model, total_loss, target_loss = _toy_linear_problem()
+    g_full = compute_gradient(model, target_loss)
+    index_list = np.array([0, 2], dtype=int)
+    matrix, rhs, _ = _build_restricted_system(model, total_loss, index_list, g_full)
+    damping = 1e-2
+
+    oracle = torch.linalg.solve(
+        matrix + damping * torch.eye(matrix.size(0), dtype=matrix.dtype), rhs
+    )
+    approx = p_lissa(
+        model=model,
+        loss=total_loss,
+        g_full=g_full,
+        index_list=index_list,
+        damping=damping,
+        mu=0.25,
+        tol=1e-12,
+        max_iter=200,
+        max_restarts=4,
+    )
+
+    torch.testing.assert_close(approx, oracle, atol=5e-5, rtol=1e-4)
+
+
 def test_p_lissa_conservative_mu_reduces_residual():
     model, total_loss, target_loss = _toy_linear_problem()
     g_full = compute_gradient(model, target_loss)

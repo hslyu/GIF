@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark influence-based model editing schemes on SVHN VGG16."""
+"""Benchmark influence-based model editing schemes on SVHN VGG11."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from gif.influence import (  # noqa: E402
 )
 from gif.influence.common import compute_gradient  # noqa: E402
 from gif.influence.restricted import build_restricted_system_from_hvp  # noqa: E402
-from gif.models import VGG16  # noqa: E402
+from gif.models import VGG11  # noqa: E402
 from gif.selection import HighestKGradients  # noqa: E402
 from gif.solvers import hyperinf_inverse, lissa_inverse, p_lissa_inverse  # noqa: E402
 
@@ -79,20 +79,20 @@ DEFAULT_METHODS = [
     "ekfac",
     "gif",
 ]
-DEFAULT_PARAM_RATIOS = [0.05]
-DEFAULT_TRAJECTORY_DIR = PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16"
+DEFAULT_PARAM_RATIOS = [0.1]
+DEFAULT_TRAJECTORY_DIR = PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg11"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark influence-based model edit schemes on SVHN VGG16."
+        description="Benchmark influence-based model edit schemes on SVHN VGG11."
     )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--num-trials", type=int, default=1)
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16.pth",
+        default=PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg11.pth",
     )
     parser.add_argument("--trajectory-dir", type=Path, default=None)
     parser.add_argument("--tracin-max-checkpoints", type=int, default=10)
@@ -100,9 +100,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=16)
-    parser.add_argument("--num-target-batches", type=int, default=10)
+    parser.add_argument("--num-target-batches", type=int, default=20)
+    parser.add_argument("--num-hvp-batches", type=int, default=4)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -115,18 +116,19 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_PARAM_RATIOS,
     )
-    parser.add_argument("--tol", type=float, default=1e-5)
+    parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--hypeinf-max-iter", type=int, default=5)
-    parser.add_argument("--solver-power-iters", type=int, default=2)
+    parser.add_argument("--solver-power-iters", type=int, default=1)
     parser.add_argument("--edit-scale", type=float, default=0.02)
     parser.add_argument("--max-update-steps", type=int, default=200)
-    parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=1.5)
+    parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=3)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
     parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument("--ekfac-damping", type=float, default=1e-3)
     parser.add_argument("--lissa-damping", type=float, default=1e-2)
+    parser.add_argument("--p-lissa-damping", type=float, default=0.0001)
     parser.add_argument("--lissa-mu-scale", type=float, default=2.0)
     parser.add_argument("--lissa-max-restarts", type=int, default=12)
     parser.add_argument(
@@ -138,7 +140,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_model() -> nn.Module:
-    return VGG16(
+    return VGG11(
         in_channels=3,
         num_classes=10,
         classifier_hidden_dim=512,
@@ -191,12 +193,16 @@ def sample_hvp_batch(
     inputs: torch.Tensor,
     targets: torch.Tensor,
     batch_size: int,
+    num_batches: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if len(targets) == 0:
         raise RuntimeError("Cannot build HVP batch from an empty retained set.")
-    if len(targets) <= batch_size:
+    if num_batches <= 0:
+        raise ValueError("num_batches must be positive.")
+    num_samples = batch_size * num_batches
+    if len(targets) <= num_samples:
         return inputs, targets
-    permutation = torch.randperm(len(targets))[:batch_size]
+    permutation = torch.randperm(len(targets))[:num_samples]
     return inputs[permutation], targets[permutation]
 
 
@@ -382,6 +388,7 @@ def p_lissa_update_from_hvp_fn(
     index_list,
     hvp_fn,
     *,
+    damping: float,
     mu: float,
     tol: float,
     max_iter: int,
@@ -392,6 +399,7 @@ def p_lissa_update_from_hvp_fn(
     return p_lissa_inverse(
         a_times=a_times,
         rhs=rhs,
+        damping=damping,
         mu=mu,
         tol=tol,
         max_iter=max_iter,
@@ -570,6 +578,7 @@ def compute_method_update(
         retained_inputs,
         retained_targets,
         args.batch_size,
+        args.num_hvp_batches,
     )
     retained_hvp_fn = make_batched_hvp_fn(
         model=model,
@@ -586,6 +595,7 @@ def compute_method_update(
             target_loss=target_loss,
             index_list=index_list,
             hvp_fn=retained_hvp_fn,
+            damping=args.p_lissa_damping,
             mu=args.mu,
             tol=args.tol,
             max_iter=args.max_iter,
@@ -670,9 +680,7 @@ def compute_method_update(
             power_iter_steps=args.solver_power_iters,
         )
     elif method_name == "datainf":
-        total_loss = build_total_loss(
-            model, retained_inputs, retained_targets, criterion, device
-        )
+        total_loss = build_total_loss(model, hvp_inputs, hvp_targets, criterion, device)
         influence = DataInfluence().compute(
             model=model,
             total_loss=total_loss,
@@ -693,8 +701,8 @@ def compute_method_update(
         influence = project_subset(
             EKFACInfluence().compute(
                 model=model,
-                retained_inputs=retained_inputs,
-                retained_targets=retained_targets,
+                retained_inputs=hvp_inputs,
+                retained_targets=hvp_targets,
                 target_inputs=sampled_inputs,
                 target_targets=sampled_targets,
                 criterion=criterion,
@@ -1027,7 +1035,7 @@ def run_single_trial(
     train_loader = bundle.train_loader
     test_loader = bundle.test_loader
     all_target_inputs, all_target_targets = collect_target_examples(
-        test_loader, args.target_label
+        train_loader, args.target_label
     )
     sampled_inputs, sampled_targets = sample_target_batches(
         all_target_inputs,
@@ -1036,7 +1044,7 @@ def run_single_trial(
         args.num_target_batches,
     )
     retained_inputs, retained_targets = collect_retained_examples(
-        test_loader, args.target_label, 1
+        train_loader, args.target_label, 1
     )
     (
         eval_target_inputs,
@@ -1096,7 +1104,7 @@ def run_single_trial(
         "config": {
             "seed": trial_seed,
             "dataset": "svhn",
-            "model": "vgg16",
+            "model": "vgg11",
             "checkpoint": str(args.checkpoint),
             "retrained_checkpoint": str(retrained_baseline["checkpoint"]),
             "trajectory_dir": None if trajectory_dir is None else str(trajectory_dir),
@@ -1108,10 +1116,13 @@ def run_single_trial(
             "mu": args.mu,
             "max_iter": args.max_iter,
             "hypeinf_max_iter": args.hypeinf_max_iter,
+            "lissa_damping": args.lissa_damping,
+            "p_lissa_damping": args.p_lissa_damping,
             "edit_scale": args.edit_scale,
             "max_update_steps": args.max_update_steps,
             "gif_max_self_acc_for_selection": args.gif_max_self_acc_for_selection,
             "num_target_batches": args.num_target_batches,
+            "num_hvp_batches": args.num_hvp_batches,
             "hvp_batch_size": args.batch_size,
             "device": args.device,
         },
@@ -1181,7 +1192,7 @@ def main() -> None:
     if trajectory_dir is not None:
         print(f"[global] Trajectory dir: {trajectory_dir}")
 
-    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg16"
+    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg11"
     all_rows: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index

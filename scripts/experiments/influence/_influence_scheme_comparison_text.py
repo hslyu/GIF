@@ -142,6 +142,7 @@ def parse_args(
     parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument("--ekfac-damping", type=float, default=1e-3)
     parser.add_argument("--lissa-damping", type=float, default=1e-2)
+    parser.add_argument("--p-lissa-damping", type=float, default=0.0)
     parser.add_argument("--lissa-mu-scale", type=float, default=2.0)
     parser.add_argument("--lissa-max-restarts", type=int, default=12)
     parser.add_argument("--max-text-length", type=int, default=128)
@@ -396,6 +397,7 @@ def p_lissa_update_from_hvp_fn(
     index_list,
     hvp_fn,
     *,
+    damping: float,
     mu: float,
     tol: float,
     max_iter: int,
@@ -406,6 +408,7 @@ def p_lissa_update_from_hvp_fn(
     return p_lissa_inverse(
         a_times=a_times,
         rhs=rhs,
+        damping=damping,
         mu=mu,
         tol=tol,
         max_iter=max_iter,
@@ -607,6 +610,7 @@ def compute_method_update(
             target_loss,
             index_list,
             retained_hvp_fn,
+            damping=args.p_lissa_damping,
             mu=args.mu,
             tol=args.tol,
             max_iter=args.max_iter,
