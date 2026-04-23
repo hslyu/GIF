@@ -103,7 +103,7 @@ def test_highest_k_gradients_updates_all_params_when_ratio_is_one():
 
 def test_caps_selects_all_params_when_ratio_is_one():
     model = TinySelectionNet()
-    selector = CAPS(model, ratio=1.0, min_curv=0.0)
+    selector = CAPS(model, ratio=1.0)
     criterion = nn.CrossEntropyLoss()
 
     inputs = torch.randn(4, 1, 4, 4)
@@ -118,7 +118,7 @@ def test_caps_selects_all_params_when_ratio_is_one():
 
 def test_caps_updates_all_params_when_ratio_is_one():
     model = TinySelectionNet()
-    selector = CAPS(model, ratio=1.0, min_curv=0.0)
+    selector = CAPS(model, ratio=1.0)
     criterion = nn.CrossEntropyLoss()
 
     inputs = torch.randn(4, 1, 4, 4)
@@ -158,7 +158,7 @@ def test_highest_k_gradients_ratio_one_selects_all_supported_params_but_not_batc
 
 def test_caps_ratio_one_selects_all_supported_params_but_not_batchnorm():
     model = TinySelectionNetWithBatchNorm()
-    selector = CAPS(model, ratio=1.0, min_curv=0.0)
+    selector = CAPS(model, ratio=1.0)
     criterion = nn.CrossEntropyLoss()
 
     inputs = torch.randn(4, 1, 4, 4)

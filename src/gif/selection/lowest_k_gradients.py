@@ -26,8 +26,11 @@ class LowestKGradients(Selection):
             if isinstance(module, nn.Linear):
                 # Compute the allotted number of neurons for each rows
                 num_weights_per_output = module.weight.size(1)
-                # Get list of indices of neurons with highest activation
-                batch_abs_mean = torch.abs(torch.mean(grad_output[0], 0))
+                # Support both [batch, out] and [batch, seq, out] gradients.
+                reduce_dims = tuple(range(grad_output[0].ndim - 1))
+                batch_abs_mean = torch.abs(
+                    torch.mean(grad_output[0], dim=reduce_dims)
+                )
             else:  # isinstance(module, nn.Conv2d):
                 num_weights_per_output = (
                     module.weight.size(1)

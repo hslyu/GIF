@@ -20,7 +20,6 @@ class CAPS(Selection):
         net,
         ratio,
         lam=1e-6,
-        min_curv=1e-12,
         use_attention_head_blocks=True,
     ):
         assert 0 < ratio <= 1, "ratio should be in (0, 1]"
@@ -28,7 +27,6 @@ class CAPS(Selection):
         self.net = net
         self.ratio = ratio
         self.lam = lam
-        self.min_curv = min_curv
         self.use_attention_head_blocks = use_attention_head_blocks
         self.module_info_list = []
 
@@ -329,14 +327,9 @@ class CAPS(Selection):
 
             block_grad = target_grads[layer_key][idx]
             block_fisher = fisher_diag[layer_key][idx]
-
-            if torch.mean(block_fisher) < self.min_curv:
-                block_score = float("-inf")
-                score_density = float("-inf")
-            else:
-                local_scores = (block_grad * block_grad) / (block_fisher + self.lam)
-                block_score = local_scores.sum().item()
-                score_density = block_score / max(block["num_params"], 1)
+            local_scores = (block_grad * block_grad) / (block_fisher + self.lam)
+            block_score = local_scores.sum().item()
+            score_density = block_score / max(block["num_params"], 1)
 
             scored_block = {
                 "score_density": score_density,
@@ -348,26 +341,18 @@ class CAPS(Selection):
             layer_to_blocks.setdefault(layer_key, []).append(scored_block)
 
         for layer_key, scored_list in layer_to_blocks.items():
-            selectable = sum(
-                item["block"]["num_params"]
-                for item in scored_list
-                if item["block_score"] != float("-inf")
-            )
+            selectable = sum(item["block"]["num_params"] for item in scored_list)
             layer_to_selectable_params[layer_key] = selectable
 
         total_selectable = sum(layer_to_selectable_params.values())
         if total_selectable == 0:
-            raise RuntimeError(
-                "No selectable blocks remain after min_curv filtering. "
-                "Consider reducing min_curv."
-            )
+            raise RuntimeError("No selectable blocks remain.")
 
         # guarantee at least one selectable block can fit
         selectable_block_sizes = [
             item["block"]["num_params"]
             for scored_list in layer_to_blocks.values()
             for item in scored_list
-            if item["block_score"] != float("-inf")
         ]
         min_selectable_block_size = min(selectable_block_sizes)
         global_budget = max(global_budget, min_selectable_block_size)
@@ -413,11 +398,7 @@ class CAPS(Selection):
             used_local = 0
 
             for item in scored_list:
-                block_score = item["block_score"]
                 block = item["block"]
-
-                if block_score == float("-inf"):
-                    continue
 
                 block_size = block["num_params"]
                 if used_local + block_size > local_budget:
@@ -454,11 +435,7 @@ class CAPS(Selection):
                     if remaining_global <= 0:
                         break
 
-                    block_score = item["block_score"]
                     block = item["block"]
-
-                    if block_score == float("-inf"):
-                        continue
 
                     block_uid = (
                         block["start_index"],
@@ -484,9 +461,7 @@ class CAPS(Selection):
                     remaining_global -= block_size
 
         if len(self.module_info_list) == 0:
-            raise RuntimeError(
-                "No blocks were selected. Consider increasing ratio or reducing min_curv."
-            )
+            raise RuntimeError("No blocks were selected. Consider increasing ratio.")
 
         self.net.zero_grad(set_to_none=True)
         return self.module_info_list

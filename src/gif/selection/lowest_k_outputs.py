@@ -27,8 +27,9 @@ class LowestKOutputs(Selection):
             if isinstance(module, nn.Linear):
                 # Compute the allotted number of neurons for each rows
                 num_weights_per_output = module.weight.size(1)
-                # Get list of indices of neurons with highest activation
-                batch_abs_mean = torch.abs(torch.mean(output, 0))
+                # Support both [batch, out] and [batch, seq, out] activations.
+                reduce_dims = tuple(range(output.ndim - 1))
+                batch_abs_mean = torch.abs(torch.mean(output, dim=reduce_dims))
             else:  # isinstance(module, nn.Conv2d):
                 num_weights_per_output = (
                     module.weight.size(1)
