@@ -35,7 +35,10 @@ from _hf_text_unlearning_common import (  # noqa: E402
 
 from gif.data.huggingface import create_hf_data_bundle  # noqa: E402
 from gif.influence import generalized_influence  # noqa: E402
-from gif.models import TextTransformerClassifier  # noqa: E402
+from gif.models import (  # noqa: E402
+    PretrainedTextEncoderClassifier,
+    TextTransformerClassifier,
+)
 from gif.selection import (  # noqa: E402
     CAPS,
     EKFACCAPS,
@@ -62,7 +65,15 @@ GRADIENT_SELECTOR_NAMES = {"highest_k_gradients", "lowest_k_gradients"}
 CAPS_STYLE_SELECTOR_NAMES = {"caps", "ekfac_caps", "reverse_caps"}
 DEFAULT_PARAM_RATIOS = [
     0.05,
-    0.5,
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    0.90,
     1.00,
 ]
 DEFAULT_SELECTORS = [
@@ -85,11 +96,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_newsgroup_text_transformer.pth",
+        default=PROJECT_ROOT / "checkpoints" / "hf_newsgroup_hf_text_encoder.pth",
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--target-label", type=int, default=1)
+    parser.add_argument("--target-label", type=int, default=0)
+    parser.add_argument(
+        "--model",
+        choices=["text_transformer", "hf_text_encoder"],
+        default="hf_text_encoder",
+    )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--num-target-batches", type=int, default=2)
@@ -120,6 +136,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nhead", type=int, default=4)
     parser.add_argument("--text-num-layers", type=int, default=4)
     parser.add_argument("--dim-feedforward", type=int, default=512)
+    parser.add_argument(
+        "--pretrained-text-model-name",
+        type=str,
+        default="google/bert_uncased_L-2_H-128_A-2",
+    )
     parser.add_argument("--save-json", type=Path, default=None)
     return parser.parse_args()
 
@@ -134,6 +155,11 @@ def default_save_path(args: argparse.Namespace) -> Path:
 
 
 def build_model(bundle, args: argparse.Namespace) -> nn.Module:
+    if args.model == "hf_text_encoder":
+        return PretrainedTextEncoderClassifier(
+            pretrained_model_name=args.pretrained_text_model_name,
+            num_classes=bundle.num_classes,
+        )
     return TextTransformerClassifier(
         vocab_size=min(bundle.vocabulary.size, args.max_vocab_size),
         max_len=args.max_text_length,
@@ -364,6 +390,9 @@ def run_single_trial(
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
+        ),
     )
 
     criterion = nn.CrossEntropyLoss()
@@ -426,6 +455,7 @@ def run_single_trial(
         "config": {
             "seed": trial_seed,
             "dataset": "newsgroup",
+            "model": args.model,
             "checkpoint": str(args.checkpoint),
             "target_label": args.target_label,
             "selectors": args.selectors,
@@ -437,6 +467,11 @@ def run_single_trial(
             "max_update_steps": args.max_update_steps,
             "num_target_batches": args.num_target_batches,
             "device": args.device,
+            "pretrained_text_model_name": (
+                args.pretrained_text_model_name
+                if args.model == "hf_text_encoder"
+                else None
+            ),
         },
         "results": ranked,
     }
@@ -465,6 +500,9 @@ def main() -> None:
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
+        ),
     )
     base_model = build_model(base_bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)

@@ -22,9 +22,7 @@ class HighestKGradients(Selection):
             selected_index_list = np.empty(0, dtype=int)
 
             if isinstance(module, nn.Linear):
-                # Compute the allotted number of neurons for each rows
                 num_weights_per_output = module.weight.size(1)
-                # Support both [batch, out] and [batch, seq, out] gradients.
                 reduce_dims = tuple(range(grad_output[0].ndim - 1))
                 batch_abs_mean = torch.abs(
                     torch.mean(grad_output[0], dim=reduce_dims)

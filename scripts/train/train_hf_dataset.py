@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pretrained-text-model-name",
         type=str,
-        default="prajjwal1/bert-tiny",
+        default="google/bert_uncased_L-2_H-128_A-2",
     )
     parser.add_argument("--grad-clip-norm", type=float, default=None)
     return parser.parse_args()

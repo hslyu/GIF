@@ -20,7 +20,7 @@ def main() -> None:
         "--model",
         "hf_text_encoder",
         "--pretrained-text-model-name",
-        "prajjwal1/bert-tiny",
+        "google/bert_uncased_L-2_H-128_A-2",
         "--save-path",
         str(save_path),
     ]

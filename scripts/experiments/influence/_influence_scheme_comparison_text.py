@@ -46,6 +46,7 @@ from gif.influence import (  # noqa: E402
 from gif.influence.common import compute_gradient  # noqa: E402
 from gif.influence.restricted import build_restricted_system_from_hvp  # noqa: E402
 from gif.models import (  # noqa: E402
+    PretrainedTextEncoderClassifier,
     TextTransformerClassifier,
     trainable_parameters_to_vector,
     vector_to_trainable_parameters,
@@ -101,7 +102,10 @@ class TrainableParameterSelector:
 
 
 def parse_args(
-    default_checkpoint: Path, default_target_label: int
+    default_checkpoint: Path,
+    default_target_label: int,
+    default_model: str,
+    default_pretrained_text_model_name: str,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark influence-based model edit schemes on a text transformer."
@@ -115,6 +119,11 @@ def parse_args(
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=default_target_label)
+    parser.add_argument(
+        "--model",
+        choices=["text_transformer", "hf_text_encoder"],
+        default=default_model,
+    )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
     parser.add_argument("--num-target-batches", type=int, default=10)
@@ -157,10 +166,20 @@ def parse_args(
         action="store_true",
         help="Raise instead of recording skipped entries for incompatible methods.",
     )
+    parser.add_argument(
+        "--pretrained-text-model-name",
+        type=str,
+        default=default_pretrained_text_model_name,
+    )
     return parser.parse_args()
 
 
 def build_model(bundle, args: argparse.Namespace) -> nn.Module:
+    if args.model == "hf_text_encoder":
+        return PretrainedTextEncoderClassifier(
+            pretrained_model_name=args.pretrained_text_model_name,
+            num_classes=bundle.num_classes,
+        )
     return TextTransformerClassifier(
         vocab_size=min(bundle.vocabulary.size, args.max_vocab_size),
         max_len=args.max_text_length,
@@ -1044,6 +1063,11 @@ def run_single_trial(
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name
+            if args.model == "hf_text_encoder"
+            else None
+        ),
     )
     criterion = nn.CrossEntropyLoss()
     base_model = build_model(bundle, args).to(device)
@@ -1130,7 +1154,7 @@ def run_single_trial(
         "config": {
             "seed": trial_seed,
             "dataset": dataset_name,
-            "model": "text_transformer",
+            "model": args.model,
             "checkpoint": str(args.checkpoint),
             "retrained_checkpoint": str(retrained_baseline["checkpoint"]),
             "trajectory_dir": None if trajectory_dir is None else str(trajectory_dir),
@@ -1147,6 +1171,11 @@ def run_single_trial(
             "gif_max_self_acc_for_selection": args.gif_max_self_acc_for_selection,
             "num_target_batches": args.num_target_batches,
             "device": args.device,
+            "pretrained_text_model_name": (
+                args.pretrained_text_model_name
+                if args.model == "hf_text_encoder"
+                else None
+            ),
         },
         "retrained_baseline": retrained_baseline,
         "results": ranked,
@@ -1164,8 +1193,15 @@ def main_for_dataset(
     result_dir_name: str,
     default_checkpoint: Path,
     default_target_label: int,
+    default_model: str = "text_transformer",
+    default_pretrained_text_model_name: str = "google/bert_uncased_L-2_H-128_A-2",
 ) -> None:
-    args = parse_args(default_checkpoint, default_target_label)
+    args = parse_args(
+        default_checkpoint,
+        default_target_label,
+        default_model,
+        default_pretrained_text_model_name,
+    )
     if args.num_trials <= 0:
         raise ValueError("--num-trials must be positive.")
 
@@ -1183,6 +1219,11 @@ def main_for_dataset(
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name
+            if args.model == "hf_text_encoder"
+            else None
+        ),
     )
     base_model = build_model(base_bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)

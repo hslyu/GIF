@@ -12,8 +12,10 @@ def main() -> None:
         result_dir_name="newsgroup",
         default_checkpoint=PROJECT_ROOT
         / "checkpoints"
-        / "hf_newsgroup_text_transformer.pth",
-        default_target_label=1,
+        / "hf_newsgroup_hf_text_encoder.pth",
+        default_target_label=0,
+        default_model="hf_text_encoder",
+        default_pretrained_text_model_name="google/bert_uncased_L-2_H-128_A-2",
     )
 
 

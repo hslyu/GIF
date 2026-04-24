@@ -163,12 +163,13 @@ class TextTransformerClassifier(nn.Module):
 def _require_transformers():
     try:
         from transformers import AutoModel
+        from transformers.utils import logging as transformers_logging
     except ImportError as exc:
         raise ImportError(
             "transformers is required for pretrained text encoder models. "
             "Install the package with `pip install transformers`."
         ) from exc
-    return AutoModel
+    return AutoModel, transformers_logging
 
 
 class PretrainedTextEncoderClassifier(nn.Module):
@@ -180,9 +181,20 @@ class PretrainedTextEncoderClassifier(nn.Module):
         dropout_prob: float = 0.1,
     ):
         super().__init__()
-        auto_model = _require_transformers()
+        auto_model, transformers_logging = _require_transformers()
         self.pretrained_model_name = pretrained_model_name
-        self.encoder = auto_model.from_pretrained(pretrained_model_name)
+        previous_verbosity = transformers_logging.get_verbosity()
+        try:
+            transformers_logging.set_verbosity_error()
+            try:
+                self.encoder = auto_model.from_pretrained(
+                    pretrained_model_name,
+                    attn_implementation="eager",
+                )
+            except TypeError:
+                self.encoder = auto_model.from_pretrained(pretrained_model_name)
+        finally:
+            transformers_logging.set_verbosity(previous_verbosity)
         hidden_size = int(self.encoder.config.hidden_size)
         self.dropout = nn.Dropout(dropout_prob)
         self.classifier = nn.Linear(hidden_size, num_classes)
