@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare parameter selection schemes on SVHN VGG16 unlearning."""
+"""Compare parameter selection schemes on SVHN VGG11 unlearning."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from _mnist_unlearning_common import (  # noqa: E402
 
 from gif.data.huggingface import create_hf_data_bundle  # noqa: E402
 from gif.influence import generalized_influence  # noqa: E402
-from gif.models import VGG16  # noqa: E402
+from gif.models import VGG11  # noqa: E402
 from gif.selection import (  # noqa: E402
     CAPS,
     EKFACCAPS,
@@ -89,19 +89,19 @@ DEFAULT_SELECTORS = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare selection schemes on SVHN VGG16 with a fixed generalized-influence update."
+        description="Compare selection schemes on SVHN VGG11 with a fixed generalized-influence update."
     )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--num-trials", type=int, default=1)
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg16.pth",
+        default=PROJECT_ROOT / "checkpoints" / "hf_svhn_vgg11.pth",
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--eval-batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--num-target-batches", type=int, default=10)
@@ -145,13 +145,13 @@ def default_save_path(args: argparse.Namespace) -> Path:
     return (
         EXPERIMENT_ROOT
         / "results"
-        / "svhn_vgg16"
+        / "svhn_vgg11"
         / f"seed_{args.seed:04d}_trials_{args.num_trials:03d}.json"
     )
 
 
 def build_model() -> nn.Module:
-    return VGG16(
+    return VGG11(
         in_channels=3,
         num_classes=10,
         classifier_hidden_dim=512,
@@ -495,7 +495,7 @@ def run_single_trial(
 
     criterion = nn.CrossEntropyLoss()
     all_target_inputs, all_target_targets = collect_target_examples(
-        bundle.test_loader, args.target_label
+        bundle.train_loader, args.target_label
     )
     sampled_inputs, sampled_targets = sample_target_batches(
         all_target_inputs,
@@ -504,7 +504,7 @@ def run_single_trial(
         args.num_target_batches,
     )
     retained_inputs, retained_targets = collect_retained_examples(
-        bundle.test_loader, args.target_label, 1
+        bundle.train_loader, args.target_label, 1
     )
     eval_target_inputs, eval_target_targets, eval_retain_inputs, eval_retain_targets = (
         collect_eval_splits(bundle.test_loader, args.target_label)
@@ -578,7 +578,7 @@ def run_single_trial(
         "config": {
             "seed": trial_seed,
             "dataset": "svhn",
-            "model": "vgg16",
+            "model": "vgg11",
             "checkpoint": str(args.checkpoint),
             "target_label": args.target_label,
             "selectors": args.selectors,
@@ -648,7 +648,7 @@ def main() -> None:
     )
     print(format_metrics("[global] Before:", base_before_metrics))
 
-    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg16"
+    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg11"
     aggregate_runs: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index

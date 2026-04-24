@@ -1035,7 +1035,7 @@ def run_single_trial(
     train_loader = bundle.train_loader
     test_loader = bundle.test_loader
     all_target_inputs, all_target_targets = collect_target_examples(
-        train_loader, args.target_label
+        test_loader, args.target_label
     )
     sampled_inputs, sampled_targets = sample_target_batches(
         all_target_inputs,
@@ -1044,7 +1044,7 @@ def run_single_trial(
         args.num_target_batches,
     )
     retained_inputs, retained_targets = collect_retained_examples(
-        train_loader, args.target_label, 1
+        test_loader, args.target_label, 1
     )
     (
         eval_target_inputs,

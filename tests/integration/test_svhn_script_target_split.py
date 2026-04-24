@@ -58,8 +58,8 @@ def test_svhn_trial_uses_train_targets_for_update(monkeypatch, tmp_path):
     def fake_run_single_method(**kwargs):
         captured["sampled_inputs"] = kwargs["sampled_inputs"].clone()
         captured["sampled_targets"] = kwargs["sampled_targets"].clone()
-        captured["retained_inputs"] = kwargs["retained_inputs"].clone()
-        captured["retained_targets"] = kwargs["retained_targets"].clone()
+        captured["hvp_inputs"] = kwargs["hvp_inputs"].clone()
+        captured["hvp_targets"] = kwargs["hvp_targets"].clone()
         return {
             "seed": kwargs["trial_seed"],
             "method": kwargs["method_name"],
@@ -97,6 +97,8 @@ def test_svhn_trial_uses_train_targets_for_update(monkeypatch, tmp_path):
         mu=1.0,
         max_iter=1,
         hypeinf_max_iter=1,
+        lissa_damping=1e-2,
+        p_lissa_damping=0.0,
         edit_scale=0.01,
         max_update_steps=1,
         gif_max_self_acc_for_selection=1.5,
@@ -117,9 +119,9 @@ def test_svhn_trial_uses_train_targets_for_update(monkeypatch, tmp_path):
     assert sampled_values.issubset({11.0, 12.0, 13.0})
     assert sampled_values.isdisjoint({91.0, 92.0})
     assert set(captured["sampled_targets"].tolist()) == {0}
-    retained_values = set(captured["retained_inputs"].view(-1).tolist())
-    assert retained_values == {21.0}
-    assert set(captured["retained_targets"].tolist()) == {1}
+    hvp_values = set(captured["hvp_inputs"].view(-1).tolist())
+    assert hvp_values == {21.0}
+    assert set(captured["hvp_targets"].tolist()) == {1}
 
 
 def test_svhn_compute_method_update_uses_sampled_retained_batch_for_datainf_and_ekfac(
@@ -137,16 +139,8 @@ def test_svhn_compute_method_update_uses_sampled_retained_batch_for_datainf_and_
     )
     sampled_inputs = torch.tensor([[5.0]])
     sampled_targets = torch.tensor([[1.0]])
-    retained_inputs = torch.tensor([[10.0], [20.0], [30.0]])
-    retained_targets = torch.tensor([[0.0], [1.0], [0.0]])
     batch_inputs = torch.tensor([[20.0]])
     batch_targets = torch.tensor([[1.0]])
-
-    monkeypatch.setattr(
-        module,
-        "sample_hvp_batch",
-        lambda *args, **kwargs: (batch_inputs.clone(), batch_targets.clone()),
-    )
 
     captured: dict[str, torch.Tensor] = {}
 
@@ -213,8 +207,8 @@ def test_svhn_compute_method_update_uses_sampled_retained_batch_for_datainf_and_
         sampled_inputs=sampled_inputs,
         sampled_targets=sampled_targets,
         all_target_count=1,
-        retained_inputs=retained_inputs,
-        retained_targets=retained_targets,
+        hvp_inputs=batch_inputs,
+        hvp_targets=batch_targets,
         param_ratio=None,
         args=args,
         device=device,
@@ -227,8 +221,8 @@ def test_svhn_compute_method_update_uses_sampled_retained_batch_for_datainf_and_
         sampled_inputs=sampled_inputs,
         sampled_targets=sampled_targets,
         all_target_count=1,
-        retained_inputs=retained_inputs,
-        retained_targets=retained_targets,
+        hvp_inputs=batch_inputs,
+        hvp_targets=batch_targets,
         param_ratio=None,
         args=args,
         device=device,
@@ -238,3 +232,84 @@ def test_svhn_compute_method_update_uses_sampled_retained_batch_for_datainf_and_
     torch.testing.assert_close(captured["datainf_targets"], batch_targets)
     torch.testing.assert_close(captured["ekfac_inputs"], batch_inputs)
     torch.testing.assert_close(captured["ekfac_targets"], batch_targets)
+
+
+def test_svhn_trial_samples_hvp_batch_once_per_trial(monkeypatch, tmp_path):
+    module = _load_svhn_script_module()
+
+    train_inputs = torch.tensor([[11.0], [12.0], [13.0], [21.0]])
+    train_targets = torch.tensor([0, 0, 0, 1])
+    test_inputs = torch.tensor([[91.0], [92.0], [31.0], [41.0]])
+    test_targets = torch.tensor([0, 0, 1, 1])
+
+    train_loader = DataLoader(
+        TensorDataset(train_inputs, train_targets), batch_size=2, shuffle=False
+    )
+    test_loader = DataLoader(
+        TensorDataset(test_inputs, test_targets), batch_size=2, shuffle=False
+    )
+
+    class _Bundle:
+        def __init__(self):
+            self.train_loader = train_loader
+            self.test_loader = test_loader
+
+    calls = {"count": 0}
+
+    def fake_sample_hvp_batch(*args, **kwargs):
+        calls["count"] += 1
+        return torch.tensor([[21.0]]), torch.tensor([1])
+
+    def fake_run_single_method(**kwargs):
+        return {
+            "seed": kwargs["trial_seed"],
+            "method": kwargs["method_name"],
+            "status": "ok",
+            "reached_target": False,
+            "retain_acc": 0.0,
+            "self_acc": 0.0,
+            "target_step": None,
+            "selected_params": 0,
+            "score": 0.0,
+        }
+
+    monkeypatch.setattr(module, "create_hf_data_bundle", lambda *args, **kwargs: _Bundle())
+    monkeypatch.setattr(module, "load_checkpoint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "build_model", lambda: _TinyModel())
+    monkeypatch.setattr(module, "build_trajectory_path", lambda args: None)
+    monkeypatch.setattr(module, "sample_hvp_batch", fake_sample_hvp_batch)
+    monkeypatch.setattr(module, "run_single_method", fake_run_single_method)
+
+    args = Namespace(
+        data_root=tmp_path,
+        batch_size=2,
+        num_workers=0,
+        dataset_id=None,
+        checkpoint=tmp_path / "dummy.pth",
+        target_label=0,
+        methods=["classical_if", "freezing", "gif"],
+        param_ratios=[0.05],
+        device="cpu",
+        tracin_max_checkpoints=1,
+        tol=1e-5,
+        mu=1.0,
+        max_iter=1,
+        hypeinf_max_iter=1,
+        lissa_damping=1e-2,
+        p_lissa_damping=0.0,
+        edit_scale=0.01,
+        max_update_steps=1,
+        gif_max_self_acc_for_selection=1.5,
+        num_target_batches=10,
+        num_hvp_batches=1,
+    )
+    retrained_baseline = {"checkpoint": str(tmp_path / "retrained.pth")}
+
+    module.run_single_trial(
+        args=args,
+        trial_seed=0,
+        save_dir=tmp_path,
+        retrained_baseline=retrained_baseline,
+    )
+
+    assert calls["count"] == 1
