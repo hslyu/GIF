@@ -83,7 +83,7 @@ DEFAULT_METHODS = [
     "ekfac",
     "gif",
 ]
-DEFAULT_PARAM_RATIOS = [0.05]
+DEFAULT_PARAM_RATIOS = [0.1]
 
 
 class TrainableParameterSelector:
@@ -124,9 +124,10 @@ def parse_args(
         choices=["text_transformer", "hf_text_encoder"],
         default=default_model,
     )
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=96)
     parser.add_argument("--num-workers", type=int, default=12)
-    parser.add_argument("--num-target-batches", type=int, default=10)
+    parser.add_argument("--num-target-batches", type=int, default=20)
+    parser.add_argument("--num-hvp-batches", type=int, default=4)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -144,9 +145,9 @@ def parse_args(
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--hypeinf-max-iter", type=int, default=5)
     parser.add_argument("--solver-power-iters", type=int, default=2)
-    parser.add_argument("--edit-scale", type=float, default=0.01)
+    parser.add_argument("--edit-scale", type=float, default=0.05)
     parser.add_argument("--max-update-steps", type=int, default=200)
-    parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=1.5)
+    parser.add_argument("--gif-max-self-acc-for-selection", type=float, default=100)
     parser.add_argument("--hyperinf-beta-scale", type=float, default=0.9)
     parser.add_argument("--datainf-damping", type=float, default=1e-6)
     parser.add_argument("--ekfac-damping", type=float, default=1e-3)
@@ -154,7 +155,7 @@ def parse_args(
     parser.add_argument("--p-lissa-damping", type=float, default=0.0)
     parser.add_argument("--lissa-mu-scale", type=float, default=2.0)
     parser.add_argument("--lissa-max-restarts", type=int, default=12)
-    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--max-text-length", type=int, default=256)
     parser.add_argument("--max-vocab-size", type=int, default=30000)
     parser.add_argument("--min-token-freq", type=int, default=2)
     parser.add_argument("--d-model", type=int, default=256)
@@ -228,12 +229,16 @@ def sample_hvp_batch(
     attention_masks: torch.Tensor,
     targets: torch.Tensor,
     batch_size: int,
+    num_batches: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if len(targets) == 0:
         raise RuntimeError("Cannot build HVP batch from an empty retained set.")
-    if len(targets) <= batch_size:
+    if num_batches <= 0:
+        raise ValueError("num_batches must be positive.")
+    num_samples = batch_size * num_batches
+    if len(targets) <= num_samples:
         return input_ids, attention_masks, targets
-    permutation = torch.randperm(len(targets))[:batch_size]
+    permutation = torch.randperm(len(targets))[:num_samples]
     return input_ids[permutation], attention_masks[permutation], targets[permutation]
 
 
@@ -516,18 +521,18 @@ def all_parameters_trainable(model: nn.Module) -> bool:
     return bool(parameters) and all(parameter.requires_grad for parameter in parameters)
 
 
+def has_trainable_parameters(model: nn.Module) -> bool:
+    return any(parameter.requires_grad for parameter in model.parameters())
+
+
 def compatibility_issue(
     method_name: str,
     model: nn.Module,
     trajectory_dir: Path | None,
 ) -> str | None:
     spec = METHOD_SPECS[method_name]
-    if spec.get("requires_all_trainable", False) and not all_parameters_trainable(
-        model
-    ):
-        return "requires all model parameters to be trainable"
-    if method_name != "datainf" and not all_parameters_trainable(model):
-        return "current implementation only supports fully trainable models for this method"
+    if not has_trainable_parameters(model):
+        return "requires at least one trainable model parameter"
     if spec.get("requires_trajectory", False):
         if trajectory_dir is None:
             return "requires a trajectory directory"
@@ -600,7 +605,7 @@ def compute_method_update(
         raise RuntimeError(f"{method_name} parameter selection returned an empty set.")
 
     index_tensor = torch.as_tensor(index_list, device=device, dtype=torch.long)
-    full_dim = sum(parameter.numel() for parameter in model.parameters())
+    full_dim = trainable_parameters_to_vector(model).numel()
 
     model.zero_grad(set_to_none=True)
     target_loss = (
@@ -611,7 +616,11 @@ def compute_method_update(
         * target_scaling
     )
     hvp_ids, hvp_masks, hvp_targets = sample_hvp_batch(
-        retained_ids, retained_masks, retained_targets, args.batch_size
+        retained_ids,
+        retained_masks,
+        retained_targets,
+        args.batch_size,
+        args.num_hvp_batches,
     )
     retained_hvp_fn = make_batched_hvp_fn(
         model=model,
@@ -772,7 +781,6 @@ def build_skipped_result(
         "status": "skipped",
         "reason": reason,
         "selected_params": 0,
-        "reached_target": False,
         "target_step": None,
         "retain_acc": before_metrics["retain_acc"],
         "self_acc": before_metrics["self_acc"],
@@ -907,7 +915,6 @@ def run_single_method(
         selected_metrics = current_metrics
 
     model.load_state_dict(best_state_dict)
-    reached_target = target_step is not None
     selected_metrics = best_metrics
     result = {
         **selected_metrics,
@@ -918,7 +925,6 @@ def run_single_method(
         "status": "ok",
         "reason": None,
         "selected_params": selected_params,
-        "reached_target": reached_target,
         "target_step": target_step,
         "best_step": best_step,
         "before_self_acc": before_metrics["self_acc"],
@@ -931,10 +937,9 @@ def run_single_method(
             args.gif_max_self_acc_for_selection if method_name == "gif" else None
         ),
     }
-    status = "Target" if reached_target else "BestScore"
     print(
         format_metrics(
-            f"{format_trial_prefix(trial_seed, method_name)} {status}:",
+            f"{format_trial_prefix(trial_seed, method_name)} BestScore:",
             result,
         )
     )
@@ -971,9 +976,6 @@ def summarize_results(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                     "mean_retain_acc_drop": float(
                         np.mean([row["retain_acc_drop"] for row in successful])
                     ),
-                    "reached_target_rate": float(
-                        np.mean([float(row["reached_target"]) for row in successful])
-                    ),
                 }
             )
         else:
@@ -983,7 +985,6 @@ def summarize_results(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                     "mean_self_acc": None,
                     "mean_score": None,
                     "mean_retain_acc_drop": None,
-                    "reached_target_rate": None,
                 }
             )
         if skipped:
@@ -1064,9 +1065,7 @@ def run_single_trial(
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
         pretrained_text_model_name=(
-            args.pretrained_text_model_name
-            if args.model == "hf_text_encoder"
-            else None
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
         ),
     )
     criterion = nn.CrossEntropyLoss()
@@ -1135,7 +1134,7 @@ def run_single_trial(
         results,
         key=lambda item: (
             item["status"] == "ok",
-            item["reached_target"],
+            item["score"],
             item["retain_acc"],
             -item["target_step"] if item["target_step"] is not None else float("-inf"),
         ),
@@ -1145,7 +1144,7 @@ def run_single_trial(
     print("\nTop results")
     for row in ranked[: min(10, len(ranked))]:
         print(
-            f"{row['method']:>18} | status={row['status']} | reached_target={int(row['reached_target'])} | "
+            f"{row['method']:>18} | status={row['status']} | "
             f"retain_acc={row['retain_acc']:.2f}% | self_acc={row['self_acc']:.2f}% | "
             f"target_step={row['target_step']} | selected={row['selected_params']} | seed={row['seed']}"
         )
@@ -1170,6 +1169,8 @@ def run_single_trial(
             "max_update_steps": args.max_update_steps,
             "gif_max_self_acc_for_selection": args.gif_max_self_acc_for_selection,
             "num_target_batches": args.num_target_batches,
+            "num_hvp_batches": args.num_hvp_batches,
+            "hvp_batch_size": args.batch_size,
             "device": args.device,
             "pretrained_text_model_name": (
                 args.pretrained_text_model_name
@@ -1220,9 +1221,7 @@ def main_for_dataset(
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
         pretrained_text_model_name=(
-            args.pretrained_text_model_name
-            if args.model == "hf_text_encoder"
-            else None
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
         ),
     )
     base_model = build_model(base_bundle, args).to(device)

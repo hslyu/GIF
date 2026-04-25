@@ -14,8 +14,10 @@ def main() -> None:
         result_dir_name="pubmed_rct20k",
         default_checkpoint=PROJECT_ROOT
         / "checkpoints"
-        / "hf_pubmed_rct20k_text_transformer.pth",
+        / "hf_pubmed_rct20k_hf_text_encoder.pth",
         default_target_label=1,
+        default_model="hf_text_encoder",
+        default_pretrained_text_model_name="google/bert_uncased_L-2_H-128_A-2",
     )
 
 
