@@ -23,6 +23,11 @@ from gif.selection import CAPS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+try:
+    torch.multiprocessing.set_sharing_strategy("file_system")
+except (AttributeError, RuntimeError):
+    pass
+
 
 def set_seed(seed: int) -> None:
     np.random.seed(seed)

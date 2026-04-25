@@ -195,6 +195,12 @@ class PretrainedTextEncoderClassifier(nn.Module):
                 self.encoder = auto_model.from_pretrained(pretrained_model_name)
         finally:
             transformers_logging.set_verbosity(previous_verbosity)
+        # This classifier pools from last_hidden_state directly, so the
+        # pretrained model's optional pooler parameters are unused.
+        pooler = getattr(self.encoder, "pooler", None)
+        if pooler is not None:
+            for parameter in pooler.parameters():
+                parameter.requires_grad = False
         hidden_size = int(self.encoder.config.hidden_size)
         self.dropout = nn.Dropout(dropout_prob)
         self.classifier = nn.Linear(hidden_size, num_classes)
