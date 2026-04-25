@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=16)
-    parser.add_argument("--num-target-batches", type=int, default=2)
+    parser.add_argument("--num-target-batches", type=int, default=10)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -129,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-5)
     parser.add_argument("--dataset-id", type=str, default=None)
-    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--max-text-length", type=int, default=256)
     parser.add_argument("--max-vocab-size", type=int, default=30000)
     parser.add_argument("--min-token-freq", type=int, default=2)
     parser.add_argument("--d-model", type=int, default=256)

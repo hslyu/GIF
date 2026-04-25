@@ -23,15 +23,25 @@ class Random(Selection):
                 continue
 
             module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            if module_size <= 0:
+                start_index += module_size
+                continue
+
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
-                num_weight_params = int(module.weight.numel() * self.ratio)
-                weight_index_list = np.random.choice(
-                    np.arange(module.weight.numel()), num_weight_params, replace=False
-                )
+                if module.weight.requires_grad:
+                    num_weight_params = int(module.weight.numel() * self.ratio)
+                    weight_index_list = np.random.choice(
+                        np.arange(module.weight.numel()),
+                        num_weight_params,
+                        replace=False,
+                    )
+                else:
+                    num_weight_params = 0
+                    weight_index_list = np.empty(0, dtype=int)
 
                 num_bias_params = 0
                 bias_index_list = np.empty(0, dtype=int)
-                if module.bias is not None:
+                if module.bias is not None and module.bias.requires_grad:
                     num_bias_params = int(module.bias.numel() * self.ratio)
                     bias_index_list = np.random.choice(
                         np.arange(module.bias.numel()), num_bias_params, replace=False

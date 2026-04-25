@@ -35,7 +35,10 @@ from _hf_text_unlearning_common import (  # noqa: E402
 
 from gif.data.huggingface import create_hf_data_bundle  # noqa: E402
 from gif.influence import generalized_influence  # noqa: E402
-from gif.models import TextTransformerClassifier  # noqa: E402
+from gif.models import (  # noqa: E402
+    PretrainedTextEncoderClassifier,
+    TextTransformerClassifier,
+)
 from gif.selection import (  # noqa: E402
     CAPS,
     EKFACCAPS,
@@ -62,19 +65,16 @@ GRADIENT_SELECTOR_NAMES = {"highest_k_gradients", "lowest_k_gradients"}
 CAPS_STYLE_SELECTOR_NAMES = {"caps", "ekfac_caps", "reverse_caps"}
 DEFAULT_PARAM_RATIOS = [
     0.05,
-    0.5,
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    0.90,
     1.00,
-    # 0.05,
-    # 0.10,
-    # 0.20,
-    # 0.30,
-    # 0.40,
-    # 0.50,
-    # 0.60,
-    # 0.70,
-    # 0.80,
-    # 0.90,
-    # 1.00,
 ]
 DEFAULT_SELECTORS = [
     "caps",
@@ -96,14 +96,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=PROJECT_ROOT / "checkpoints" / "hf_pubmed_rct20k_text_transformer.pth",
+        default=PROJECT_ROOT / "checkpoints" / "hf_pubmed_rct20k_hf_text_encoder.pth",
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=1)
+    parser.add_argument(
+        "--model",
+        choices=["text_transformer", "hf_text_encoder"],
+        default="hf_text_encoder",
+    )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
-    parser.add_argument("--num-target-batches", type=int, default=2)
+    parser.add_argument("--num-target-batches", type=int, default=10)
+    parser.add_argument("--num-hvp-batches", type=int, default=4)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -124,13 +130,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument("--dataset-id", type=str, default=None)
-    parser.add_argument("--max-text-length", type=int, default=128)
+    parser.add_argument("--max-text-length", type=int, default=256)
     parser.add_argument("--max-vocab-size", type=int, default=30000)
     parser.add_argument("--min-token-freq", type=int, default=2)
     parser.add_argument("--d-model", type=int, default=256)
     parser.add_argument("--nhead", type=int, default=4)
     parser.add_argument("--text-num-layers", type=int, default=4)
     parser.add_argument("--dim-feedforward", type=int, default=512)
+    parser.add_argument(
+        "--pretrained-text-model-name",
+        type=str,
+        default="google/bert_uncased_L-2_H-128_A-2",
+    )
     parser.add_argument("--save-json", type=Path, default=None)
     return parser.parse_args()
 
@@ -145,6 +156,11 @@ def default_save_path(args: argparse.Namespace) -> Path:
 
 
 def build_model(bundle, args: argparse.Namespace) -> nn.Module:
+    if args.model == "hf_text_encoder":
+        return PretrainedTextEncoderClassifier(
+            pretrained_model_name=args.pretrained_text_model_name,
+            num_classes=bundle.num_classes,
+        )
     return TextTransformerClassifier(
         vocab_size=min(bundle.vocabulary.size, args.max_vocab_size),
         max_len=args.max_text_length,
@@ -224,6 +240,28 @@ def sample_target_batches(
     )
 
 
+def sample_hvp_batch(
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
+    targets: torch.Tensor,
+    batch_size: int,
+    num_batches: int = 1,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if len(targets) == 0:
+        raise RuntimeError("Cannot build HVP batch from an empty retained set.")
+    if num_batches <= 0:
+        raise ValueError("num_batches must be positive.")
+    num_samples = batch_size * num_batches
+    if len(targets) <= num_samples:
+        return input_ids, attention_masks, targets
+    permutation = torch.randperm(len(targets))[:num_samples]
+    return (
+        input_ids[permutation],
+        attention_masks[permutation],
+        targets[permutation],
+    )
+
+
 def run_single_selector(
     selector_name: str,
     param_ratio: float,
@@ -240,6 +278,9 @@ def run_single_selector(
     retained_ids: torch.Tensor,
     retained_masks: torch.Tensor,
     retained_targets: torch.Tensor,
+    hvp_ids: torch.Tensor,
+    hvp_masks: torch.Tensor,
+    hvp_targets: torch.Tensor,
     base_state_dict: dict[str, torch.Tensor],
     model_factory,
     device: torch.device,
@@ -254,9 +295,9 @@ def run_single_selector(
 
     total_loss = build_total_loss(
         model,
-        retained_ids,
-        retained_masks,
-        retained_targets,
+        hvp_ids,
+        hvp_masks,
+        hvp_targets,
         criterion,
         device,
     )
@@ -375,6 +416,9 @@ def run_single_trial(
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
+        ),
     )
 
     criterion = nn.CrossEntropyLoss()
@@ -390,6 +434,13 @@ def run_single_trial(
     )
     retained_ids, retained_masks, retained_targets = collect_retained_examples(
         bundle.test_loader, args.target_label, 1
+    )
+    hvp_ids, hvp_masks, hvp_targets = sample_hvp_batch(
+        retained_ids,
+        retained_masks,
+        retained_targets,
+        args.batch_size,
+        args.num_hvp_batches,
     )
 
     base_model = build_model(bundle, args).to(device)
@@ -417,6 +468,9 @@ def run_single_trial(
                     retained_ids=retained_ids,
                     retained_masks=retained_masks,
                     retained_targets=retained_targets,
+                    hvp_ids=hvp_ids,
+                    hvp_masks=hvp_masks,
+                    hvp_targets=hvp_targets,
                     base_state_dict=base_state,
                     model_factory=model_factory,
                     device=device,
@@ -437,6 +491,7 @@ def run_single_trial(
         "config": {
             "seed": trial_seed,
             "dataset": "pubmed_rct20k",
+            "model": args.model,
             "checkpoint": str(args.checkpoint),
             "target_label": args.target_label,
             "selectors": args.selectors,
@@ -447,7 +502,14 @@ def run_single_trial(
             "edit_scale": args.edit_scale,
             "max_update_steps": args.max_update_steps,
             "num_target_batches": args.num_target_batches,
+            "num_hvp_batches": args.num_hvp_batches,
+            "hvp_batch_size": args.batch_size,
             "device": args.device,
+            "pretrained_text_model_name": (
+                args.pretrained_text_model_name
+                if args.model == "hf_text_encoder"
+                else None
+            ),
         },
         "results": ranked,
     }
@@ -476,6 +538,9 @@ def main() -> None:
         max_text_length=args.max_text_length,
         max_vocab_size=args.max_vocab_size,
         min_token_freq=args.min_token_freq,
+        pretrained_text_model_name=(
+            args.pretrained_text_model_name if args.model == "hf_text_encoder" else None
+        ),
     )
     base_model = build_model(base_bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)
