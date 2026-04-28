@@ -98,6 +98,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tracin-max-checkpoints", type=int, default=10)
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--dataset-id", type=str, default=None)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory where per-seed JSON results are saved.",
+    )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--target-label", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=512)
@@ -688,7 +694,10 @@ def compute_method_update(
             damping=args.datainf_damping,
         )
     elif method_name == "freezing":
-        influence = freezing_update_from_hvp_fn(
+        # The fixed-point freezing solver returns the local parameter direction
+        # that reinforces the target split for this objective. Model editing
+        # needs the opposite direction to remove target-label behavior.
+        influence = -freezing_update_from_hvp_fn(
             model,
             target_loss,
             index_list=index_list,
@@ -1192,7 +1201,7 @@ def main() -> None:
     if trajectory_dir is not None:
         print(f"[global] Trajectory dir: {trajectory_dir}")
 
-    save_root = EXPERIMENT_ROOT / "results" / "svhn_vgg11"
+    save_root = args.output_dir or (EXPERIMENT_ROOT / "results" / "svhn_vgg11")
     all_rows: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index

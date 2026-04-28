@@ -1,0 +1,649 @@
+#!/usr/bin/env python3
+"""
+Plot selection scheme comparison results.
+
+The experiment runners write one JSON file per seed under results/<dataset>/.
+This script aggregates those seed files and plots each selector's performance
+over the parameter-ratio sweep as mean +/- std or mean +/- sem.
+"""
+
+from __future__ import annotations
+
+import argparse
+import colorsys
+import json
+from collections import defaultdict
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import colors as mcolors
+from matplotlib.lines import Line2D
+from matplotlib.patches import ConnectionPatch, Rectangle
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+SELECTOR_ORDER = [
+    "caps",
+    "highest_k_gradients",
+    "highest_k_outputs",
+    "random",
+    "lowest_k_outputs",
+    "lowest_k_gradients",
+    "reverse_caps",
+]
+
+SELECTOR_LABELS = {
+    "caps": "CAPS",
+    "reverse_caps": "Reverse CAPS",
+    "highest_k_outputs": "Highest Outputs",
+    "highest_k_gradients": "Highest Gradients",
+    "lowest_k_outputs": "Lowest Outputs",
+    "lowest_k_gradients": "Lowest Gradients",
+    "random": "Random",
+}
+
+SELECTOR_LINE_ZORDER = {
+    selector: 100 - idx for idx, selector in enumerate(SELECTOR_ORDER)
+}
+SELECTOR_BAND_ZORDER = {
+    selector: 10 - idx * 0.1 for idx, selector in enumerate(SELECTOR_ORDER)
+}
+
+COLORS = {
+    "caps": "#073b8e",
+    "highest_k_gradients": "#2575f4",
+    "highest_k_outputs": "#5cbcbf",
+    "lowest_k_outputs": "#f4aa62",
+    "lowest_k_gradients": "#e8563d",
+    "reverse_caps": "#b21424",
+    "random": "#666666",
+}
+
+MARKERS = {
+    "caps": "o",
+    "highest_k_gradients": "8",
+    "highest_k_outputs": "h",
+    "random": "s",
+    "reverse_caps": "^",
+    "lowest_k_outputs": "v",
+    "lowest_k_gradients": "D",
+}
+
+MARKER_SIZES = {
+    "caps": 7.6,
+    "highest_k_gradients": 7.6,
+    "highest_k_outputs": 7.6,
+    "random": 6.6,
+    "reverse_caps": 7.6,
+    "lowest_k_outputs": 7.6,
+    "lowest_k_gradients": 6.6,
+}
+INSET_MARKER_SIZES = {selector: size - 1.3 for selector, size in MARKER_SIZES.items()}
+
+GRID_KW = {"linestyle": (0, (5, 5)), "linewidth": 0.5, "color": "#e0e0e0"}
+RETRAINED_LINE_KW = {
+    "color": "#222222",
+    "linestyle": (0, (2, 2)),
+    "linewidth": 1.4,
+    "zorder": 2,
+}
+MAIN_XTICKS = [0.05, 0.2, 0.4, 0.6, 0.8, 1.0]
+MAIN_XTICK_LABELS = ["5", "20", "40", "60", "80", "100"]
+MAIN_XLIM = (0.03, 1.02)
+UNCERTAINTY_SMOOTH_KERNEL = np.asarray([1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0], dtype=float)
+UNCERTAINTY_SMOOTH_KERNEL /= UNCERTAINTY_SMOOTH_KERNEL.sum()
+UNCERTAINTY_SMOOTH_PASSES = 2
+
+DATASETS = [
+    ("mnist_fcn", "MNIST", "FCN"),
+    ("cifar10_resnet18", "CIFAR-10", "ResNet-18"),
+    ("svhn_vgg11", "SVHN", "VGG-11"),
+    ("newsgroup", "Newsgroups", "BERT-L2-H128"),
+    ("pubmed_rct20k", "PubMed 20k RCT", "BERT-L2-H128"),
+]
+DATASET_ORDER = [dataset_key for dataset_key, _, _ in DATASETS]
+DATASET_TITLES = {
+    dataset_key: f"{dataset_label}\n{model_label}"
+    for dataset_key, dataset_label, model_label in DATASETS
+}
+
+DATASET_YLIMS = {
+    "cifar10_resnet18": (60, 90),
+    "newsgroup": (10, 70),
+}
+
+DATASET_INTERVALS = {
+    "cifar10_resnet18": "std",
+}
+DEFAULT_INTERVAL = "sem"
+
+
+def load_seed_rows(dataset_dir: Path) -> list[dict]:
+    rows: list[dict] = []
+    for path in sorted(dataset_dir.glob("seed_*.json")):
+        if "_trials_" in path.name:
+            continue
+        with path.open() as f:
+            payload = json.load(f)
+        for row in payload.get("results", []):
+            if "selector" not in row or "param_ratio" not in row:
+                continue
+            enriched = dict(row)
+            enriched["dataset"] = dataset_dir.name
+            rows.append(enriched)
+    return rows
+
+
+def load_retrained_baselines(results_dir: Path, metric: str) -> dict[str, float]:
+    baselines = {}
+    if not results_dir.exists():
+        return baselines
+
+    for dataset_dir in sorted(results_dir.iterdir()):
+        if not dataset_dir.is_dir():
+            continue
+        values = []
+        for path in sorted(dataset_dir.glob("seed_*.json")):
+            if "_trials_" in path.name:
+                continue
+            with path.open() as f:
+                payload = json.load(f)
+            metrics = payload.get("retrained_baseline", {}).get("metrics", {})
+            value = metrics.get(metric)
+            if value is not None:
+                values.append(float(value))
+        if values:
+            baselines[dataset_dir.name] = float(np.mean(values))
+    return baselines
+
+
+def aggregate(rows: list[dict], metric: str) -> dict[tuple[str, float], dict]:
+    values: dict[tuple[str, float], list[float]] = defaultdict(list)
+    for row in rows:
+        value = row.get(metric)
+        if value is None:
+            continue
+        values[(row["selector"], float(row["param_ratio"]))].append(float(value))
+
+    summary = {}
+    for key, vals in values.items():
+        arr = np.asarray(vals, dtype=float)
+        summary[key] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std(ddof=1)) if len(arr) > 1 else 0.0,
+            "n": int(len(arr)),
+        }
+    return summary
+
+
+def ordered_selectors(
+    summary: dict[tuple[str, float], dict], ratios: list[float]
+) -> list[str]:
+    selectors = [s for s in SELECTOR_ORDER if any((s, r) in summary for r in ratios)]
+    selectors += sorted({s for s, _ in summary} - set(selectors))
+    return selectors
+
+
+def compute_spread(stats: dict, interval: str) -> float:
+    if interval == "sem":
+        return stats["std"] / np.sqrt(stats["n"])
+    return stats["std"]
+
+
+def marker_face_color(color: str) -> tuple[float, float, float]:
+    rgb = np.asarray(mcolors.to_rgb(color), dtype=float)
+    return tuple(0.02 * rgb + 0.98 * np.ones(3))
+
+
+def marker_edge_color(color: str) -> tuple[float, float, float]:
+    red, green, blue = mcolors.to_rgb(color)
+    hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
+    saturation = min(1.0, saturation * 1.35 + 0.12)
+    lightness = max(0.26, lightness * 0.82)
+    return colorsys.hls_to_rgb(hue, lightness, saturation)
+
+
+def interval_for_dataset(dataset: str) -> str:
+    return DATASET_INTERVALS.get(dataset, DEFAULT_INTERVAL)
+
+
+def smooth_uncertainty_band(spread: np.ndarray, enabled: bool) -> np.ndarray:
+    """Smooth only the visual uncertainty width, not the mean curve."""
+    if not enabled or len(spread) < len(UNCERTAINTY_SMOOTH_KERNEL):
+        return spread
+
+    smoothed = spread.copy()
+    pad = len(UNCERTAINTY_SMOOTH_KERNEL) // 2
+    for _ in range(UNCERTAINTY_SMOOTH_PASSES):
+        padded = np.pad(smoothed, pad_width=pad, mode="edge")
+        smoothed = np.convolve(padded, UNCERTAINTY_SMOOTH_KERNEL, mode="valid")
+    return np.maximum(smoothed, 0.0)
+
+
+def draw_background_grid(ax) -> None:
+    """Draw grid as normal low-zorder artists to avoid vector backend ordering bugs."""
+    ax.grid(False)
+    ax.patch.set_zorder(-10)
+    x_min, x_max = ax.get_xlim()
+    y_min, y_max = ax.get_ylim()
+
+    for x in ax.get_xticks():
+        if x_min <= x <= x_max:
+            ax.axvline(x, label="_nolegend_", clip_on=True, zorder=0, **GRID_KW)
+    for y in ax.get_yticks():
+        if y_min <= y <= y_max:
+            ax.axhline(y, label="_nolegend_", clip_on=True, zorder=0, **GRID_KW)
+
+
+def draw_dataset_axis(
+    ax,
+    dataset: str,
+    rows: list[dict],
+    metric: str,
+    smooth_uncertainty: bool,
+    retrained_baseline: float | None = None,
+    include_legend_labels: bool = False,
+    zoom_xlim: tuple[float, float] | None = None,
+    zoom_ylim: tuple[float, float] | None = None,
+) -> list:
+    summary = aggregate(rows, metric)
+    interval = interval_for_dataset(dataset)
+    ratios = sorted({ratio for _, ratio in summary})
+    selectors = ordered_selectors(summary, ratios)
+    handles = []
+    zoom_data = []
+
+    for selector in selectors:
+        xs = [r for r in ratios if (selector, r) in summary]
+        ys = [summary[(selector, r)]["mean"] for r in xs]
+        spread = [compute_spread(summary[(selector, r)], interval) for r in xs]
+        xs_arr = np.asarray(xs, dtype=float)
+        ys_arr = np.asarray(ys, dtype=float)
+        spread_arr = smooth_uncertainty_band(
+            np.asarray(spread, dtype=float),
+            enabled=smooth_uncertainty,
+        )
+        color = COLORS.get(selector)
+        marker = MARKERS.get(selector, "o")
+        marker_size = MARKER_SIZES.get(selector, 6.6)
+        inset_marker_size = INSET_MARKER_SIZES.get(selector, 5.3)
+        line_zorder = SELECTOR_LINE_ZORDER.get(selector, 50)
+        band_zorder = SELECTOR_BAND_ZORDER.get(selector, 5)
+        label = (
+            SELECTOR_LABELS.get(selector, selector) if include_legend_labels else None
+        )
+        (handle,) = ax.plot(
+            xs,
+            ys,
+            marker=marker,
+            linewidth=2.0,
+            markersize=marker_size,
+            color=color,
+            markerfacecolor=marker_face_color(color),
+            markeredgecolor=marker_edge_color(color),
+            markeredgewidth=1.15,
+            zorder=line_zorder,
+            label=label,
+        )
+        ax.fill_between(
+            xs_arr,
+            ys_arr - spread_arr,
+            ys_arr + spread_arr,
+            color=color,
+            alpha=0.13,
+            linewidth=0,
+            zorder=band_zorder,
+        )
+        handles.append(handle)
+        zoom_data.append(
+            (xs_arr, ys_arr, spread_arr, color, marker, line_zorder, band_zorder)
+            + (inset_marker_size,)
+        )
+
+    if retrained_baseline is not None:
+        ax.axhline(retrained_baseline, label="_nolegend_", **RETRAINED_LINE_KW)
+
+    ax.set_title(DATASET_TITLES.get(dataset, dataset), fontsize=12)
+    ax.set_xticks(MAIN_XTICKS)
+    ax.set_xticklabels(MAIN_XTICK_LABELS, fontsize=8)
+    ax.set_xlim(*MAIN_XLIM)
+    if dataset in DATASET_YLIMS:
+        ax.set_ylim(*DATASET_YLIMS[dataset])
+    ax.tick_params(axis="y", labelsize=8)
+    draw_background_grid(ax)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    if zoom_xlim is not None:
+        zoom_xmin, zoom_xmax = zoom_xlim
+        zoom_ax = inset_axes(
+            ax,
+            width="44%",
+            height="44%",
+            loc="lower right",
+            bbox_to_anchor=(-0.055, 0.075, 1.0, 1.0),
+            bbox_transform=ax.transAxes,
+            borderpad=1.0,
+        )
+        zoom_y_values = []
+        if retrained_baseline is not None:
+            zoom_ax.axhline(retrained_baseline, label="_nolegend_", **RETRAINED_LINE_KW)
+        for (
+            xs_arr,
+            ys_arr,
+            spread_arr,
+            color,
+            marker,
+            line_zorder,
+            band_zorder,
+            inset_marker_size,
+        ) in zoom_data:
+            mask = (zoom_xmin <= xs_arr) & (xs_arr <= zoom_xmax)
+            if not np.any(mask):
+                continue
+            zoom_ax.plot(
+                xs_arr[mask],
+                ys_arr[mask],
+                marker=marker,
+                linewidth=1.5,
+                markersize=inset_marker_size,
+                color=color,
+                markerfacecolor=marker_face_color(color),
+                markeredgecolor=marker_edge_color(color),
+                markeredgewidth=0.9,
+                zorder=line_zorder,
+            )
+            zoom_ax.fill_between(
+                xs_arr[mask],
+                ys_arr[mask] - spread_arr[mask],
+                ys_arr[mask] + spread_arr[mask],
+                color=color,
+                alpha=0.13,
+                linewidth=0,
+                zorder=band_zorder,
+            )
+            zoom_y_values.extend((ys_arr[mask] - spread_arr[mask]).tolist())
+            zoom_y_values.extend((ys_arr[mask] + spread_arr[mask]).tolist())
+
+        zoom_ax.set_xlim(zoom_xmin, zoom_xmax)
+        box_ymin = None
+        box_ymax = None
+        if zoom_ylim is not None:
+            zoom_ymin, zoom_ymax = zoom_ylim
+            show_fraction_ticks = bool(
+                zoom_y_values and max(zoom_y_values) > 1.0 and zoom_ymax <= 1.0
+            )
+            if show_fraction_ticks:
+                zoom_ymin *= 100.0
+                zoom_ymax *= 100.0
+            box_ymin = zoom_ymin
+            box_ymax = zoom_ymax
+            zoom_ax.set_ylim(zoom_ymin, zoom_ymax)
+            if show_fraction_ticks:
+                zoom_ax.set_yticks(
+                    [zoom_ymin, (zoom_ymin + zoom_ymax) / 2.0, zoom_ymax]
+                )
+                zoom_ax.set_yticklabels(
+                    [f"{tick / 100.0:.2f}" for tick in zoom_ax.get_yticks()]
+                )
+            ax.add_patch(
+                Rectangle(
+                    (zoom_xmin, zoom_ymin),
+                    zoom_xmax - zoom_xmin,
+                    zoom_ymax - zoom_ymin,
+                    fill=False,
+                    edgecolor="0.25",
+                    linewidth=1.0,
+                    linestyle="--",
+                    zorder=10,
+                )
+            )
+        elif zoom_y_values:
+            ymin = min(zoom_y_values)
+            ymax = max(zoom_y_values)
+            pad = max((ymax - ymin) * 0.12, 0.1)
+            box_ymin = ymin - pad
+            box_ymax = ymax + pad
+            zoom_ax.set_ylim(ymin - pad, ymax + pad)
+            ax.add_patch(
+                Rectangle(
+                    (zoom_xmin, ymin - pad),
+                    zoom_xmax - zoom_xmin,
+                    (ymax - ymin) + 2 * pad,
+                    fill=False,
+                    edgecolor="0.25",
+                    linewidth=1.0,
+                    linestyle="--",
+                    zorder=10,
+                )
+            )
+        zoom_ax.set_xticks([0.05, 0.1, 0.2])
+        zoom_ax.set_xticklabels(["5", "10", "20"])
+        zoom_ax.tick_params(labelsize=7, pad=1)
+        draw_background_grid(zoom_ax)
+        if box_ymax is not None:
+            for parent_xy, inset_xy in [
+                ((zoom_xmin, box_ymin), (0.0, 1.0)),
+                ((zoom_xmax, box_ymin), (1.0, 1.0)),
+            ]:
+                ax.figure.add_artist(
+                    ConnectionPatch(
+                        xyA=parent_xy,
+                        coordsA=ax.transData,
+                        axesA=ax,
+                        xyB=inset_xy,
+                        coordsB=zoom_ax.transAxes,
+                        axesB=zoom_ax,
+                        color="0.45",
+                        linewidth=0.8,
+                        clip_on=False,
+                        zorder=11,
+                    )
+                )
+    return handles
+
+
+def plot_dataset(
+    dataset: str,
+    rows: list[dict],
+    out_dir: Path,
+    metric: str,
+    smooth_uncertainty: bool,
+    retrained_baselines: dict[str, float],
+) -> Path | None:
+    summary = aggregate(rows, metric)
+    ratios = sorted({ratio for _, ratio in summary})
+    selectors = ordered_selectors(summary, ratios)
+
+    if len(ratios) < 2 or not selectors:
+        return None
+
+    fig, ax = plt.subplots(figsize=(10.5, 6.2), constrained_layout=True)
+    draw_dataset_axis(
+        ax,
+        dataset,
+        rows,
+        metric,
+        smooth_uncertainty=smooth_uncertainty,
+        retrained_baseline=retrained_baselines.get(dataset),
+        include_legend_labels=True,
+    )
+    interval = interval_for_dataset(dataset)
+    ylabel = metric.replace("_", " ").title()
+    ax.set_title(f"{dataset}: selection schemes over parameter ratio", fontsize=14)
+    ax.set_xlabel("Parameter ratio")
+    ax.set_ylabel(f"{ylabel} (mean +/- {interval})")
+    ax.legend(ncol=2, frameon=False, fontsize=9)
+
+    out_path = out_dir / f"{dataset}_{metric}.png"
+    fig.savefig(out_path, dpi=180)
+    fig.savefig(out_path.with_suffix(".pdf"))
+    plt.close(fig)
+    return out_path
+
+
+def plot_combined_grid(
+    all_rows: dict[str, list[dict]],
+    out_dir: Path,
+    metric: str,
+    smooth_uncertainty: bool,
+    retrained_baselines: dict[str, float],
+) -> Path:
+    ordered_datasets = [d for d in DATASET_ORDER if d in all_rows]
+    ordered_datasets += sorted(set(all_rows) - set(ordered_datasets))
+    if len(ordered_datasets) > 5:
+        ordered_datasets = ordered_datasets[:5]
+
+    fig, axes = plt.subplots(2, 3, figsize=(15.0, 8.2), constrained_layout=True)
+    flat_axes = axes.ravel()
+    legend_handles = None
+    legend_labels = None
+
+    for ax, dataset in zip(flat_axes[:5], ordered_datasets):
+        handles = draw_dataset_axis(
+            ax,
+            dataset,
+            all_rows[dataset],
+            metric,
+            smooth_uncertainty=smooth_uncertainty,
+            retrained_baseline=retrained_baselines.get(dataset),
+            include_legend_labels=True,
+            zoom_xlim=(0.04, 0.21) if dataset == "cifar10_resnet18" else None,
+            zoom_ylim=(0.82, 0.86) if dataset == "cifar10_resnet18" else None,
+        )
+        if legend_handles is None:
+            legend_handles = handles
+            legend_labels = [handle.get_label() for handle in handles]
+
+    for ax in flat_axes[len(ordered_datasets) : 5]:
+        ax.axis("off")
+
+    legend_ax = flat_axes[5]
+    legend_ax.axis("off")
+    if legend_handles and legend_labels:
+        legend_handles = legend_handles + [
+            Line2D([0], [0], label="From-scratch retrain", **RETRAINED_LINE_KW)
+        ]
+        legend_labels = legend_labels + ["From-scratch retrain"]
+        legend_ax.legend(
+            legend_handles,
+            legend_labels,
+            loc="center",
+            frameon=False,
+            fontsize=11,
+            handlelength=2.4,
+            labelspacing=1.0,
+        )
+    legend_ax.set_title("Selection scheme", fontsize=12, pad=10)
+
+    ylabel = metric.replace("_", " ").title()
+    fig.supxlabel("Parameter ratio (%)", fontsize=12)
+    fig.supylabel(ylabel, fontsize=12)
+
+    out_path = out_dir / f"selection_schemes_{metric}.png"
+    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path.with_suffix(".pdf"))
+    plt.close(fig)
+    return out_path
+
+
+def write_summary_json(
+    all_rows: dict[str, list[dict]], out_dir: Path, metric: str
+) -> Path:
+    payload = {}
+    for dataset, rows in sorted(all_rows.items()):
+        summary = aggregate(rows, metric)
+        payload[dataset] = {
+            selector: {
+                f"{ratio:g}": stats
+                for (sel, ratio), stats in sorted(summary.items())
+                if sel == selector
+            }
+            for selector in sorted({selector for selector, _ in summary})
+        }
+
+    out_path = out_dir / f"summary_{metric}.json"
+    with out_path.open("w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    return out_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results-dir", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--retrained-results-dir",
+        type=Path,
+        default=Path("../unlearn/results"),
+        help="Directory containing JSON files with retrained_baseline metrics.",
+    )
+    parser.add_argument("--out-dir", type=Path, default=Path("results/plots"))
+    parser.add_argument("--metric", default="retain_acc")
+    parser.add_argument(
+        "--include-small-runs",
+        action="store_true",
+        help="Include result folders with fewer than two parameter ratios.",
+    )
+    parser.add_argument(
+        "--write-individual",
+        action="store_true",
+        help="Also write one figure per dataset.",
+    )
+    parser.add_argument(
+        "--no-smooth-uncertainty",
+        action="store_true",
+        help="Draw raw std/sem bands without smoothing.",
+    )
+    args = parser.parse_args()
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    all_rows = {}
+    for dataset_dir in sorted(args.results_dir.iterdir()):
+        if not dataset_dir.is_dir():
+            continue
+        rows = load_seed_rows(dataset_dir)
+        ratios = {row.get("param_ratio") for row in rows}
+        if not args.include_small_runs and len(ratios) < 2:
+            continue
+        if rows:
+            all_rows[dataset_dir.name] = rows
+
+    if not all_rows:
+        raise SystemExit(f"No plottable result rows found under {args.results_dir}")
+
+    retrained_baselines = load_retrained_baselines(
+        args.retrained_results_dir, args.metric
+    )
+
+    written = []
+    if args.write_individual:
+        for dataset, rows in all_rows.items():
+            path = plot_dataset(
+                dataset,
+                rows,
+                args.out_dir,
+                args.metric,
+                smooth_uncertainty=not args.no_smooth_uncertainty,
+                retrained_baselines=retrained_baselines,
+            )
+            if path is not None:
+                written.append(path)
+
+    written.append(
+        plot_combined_grid(
+            all_rows,
+            args.out_dir,
+            args.metric,
+            smooth_uncertainty=not args.no_smooth_uncertainty,
+            retrained_baselines=retrained_baselines,
+        )
+    )
+    written.append(write_summary_json(all_rows, args.out_dir, args.metric))
+
+    print("Wrote:")
+    for path in written:
+        print(f"  {path}")
+
+
+if __name__ == "__main__":
+    main()

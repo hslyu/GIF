@@ -122,6 +122,7 @@ def p_lissa_inverse(
     max_iter: int = 200,
     max_restarts: int = 8,
     power_iter_steps: int = 6,
+    keep_best_iterate: bool = True,
     verbose: bool = False,
 ) -> torch.Tensor:
     STABLE_PATIENCE = 2
@@ -169,7 +170,8 @@ def p_lissa_inverse(
     best_rel_residual = float("inf")
 
     for restart in range(max_restarts):
-        x = mu * rhs.clone()
+        x = rhs.clone()
+        x.mul_(mu)
         x0_norm = torch.linalg.norm(x).item()
         ema_residual = None
         best_ema = float("inf")
@@ -180,19 +182,16 @@ def p_lissa_inverse(
         for t in range(max_iter):
             Ax = apply_operator(x)
             r = rhs - Ax
-            step = mu * r
-            x_next = x + step
 
             if (
                 (not torch.isfinite(r).all())
                 or (not torch.isfinite(x).all())
-                or (not torch.isfinite(x_next).all())
             ):
                 bad_hits += 1
             else:
                 residual_norm = torch.linalg.norm(r).item()
                 rel_residual = residual_norm / rhs_norm
-                step_norm = torch.linalg.norm(step).item()
+                step_norm = abs(mu) * residual_norm
                 x_norm = torch.linalg.norm(x).item()
 
                 if ema_residual is None:
@@ -204,7 +203,8 @@ def p_lissa_inverse(
 
                 if rel_residual < best_rel_residual:
                     best_rel_residual = rel_residual
-                    best_x = x.detach().clone()
+                    if keep_best_iterate:
+                        best_x = x.detach().clone()
 
                 residual_ok = rel_residual < tol
                 step_ok = step_norm <= tol * max(x_norm, 1.0)
@@ -215,12 +215,13 @@ def p_lissa_inverse(
                     stable_hits = 0
 
                 if stable_hits >= STABLE_PATIENCE:
+                    x.add_(r, alpha=mu)
                     if verbose:
                         print(
                             f"[p_lissa] converged at restart={restart}, "
                             f"iter={t + 1}, rel_residual={rel_residual:.3e}"
                         )
-                    return x_next
+                    return x
 
                 if ema_residual > BLOWUP_FACTOR * max(best_ema, 1e-30):
                     bad_hits += 1
@@ -264,7 +265,8 @@ def p_lissa_inverse(
                         flush=True,
                     )
 
-            x = x_next
+            if torch.isfinite(r).all() and torch.isfinite(x).all():
+                x.add_(r, alpha=mu)
         else:
             if verbose:
                 print()
@@ -277,6 +279,13 @@ def p_lissa_inverse(
                 f"Returning best iterate with rel_residual={best_rel_residual:.3e}"
             )
         return best_x
+
+    if torch.isfinite(x).all():
+        if verbose:
+            print(
+                "\n[p_lissa] all restarts exhausted. Returning last finite iterate."
+            )
+        return x
 
     raise RuntimeError("p_lissa failed: no finite iterate was produced.")
 
