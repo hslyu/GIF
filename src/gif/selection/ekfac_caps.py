@@ -149,9 +149,6 @@ class EKFACCAPS(CAPS):
         )
         stats_by_module = {id(stats.info.module): stats for stats in ekfac_stats.values()}
 
-        total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
-        global_budget = max(1, int(total_params * self.ratio))
-
         scored_blocks = []
         total_gradient_energy = 0.0
 
@@ -200,6 +197,13 @@ class EKFACCAPS(CAPS):
 
         if len(scored_blocks) == 0:
             raise RuntimeError("No EKFAC-selectable blocks were found.")
+
+        total_selectable = sum(item["block"]["num_params"] for item in scored_blocks)
+        global_budget = max(1, int(total_selectable * self.ratio))
+        min_selectable_block_size = min(
+            item["block"]["num_params"] for item in scored_blocks
+        )
+        global_budget = max(global_budget, min_selectable_block_size)
 
         scored_blocks.sort(
             key=lambda item: (item["score"], item["energy"]),

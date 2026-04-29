@@ -297,9 +297,6 @@ class ReverseCAPS(Selection):
         for module in unique_modules:
             fisher_diag[id(module)] /= retained_batches
 
-        total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
-        global_budget = max(1, int(total_params * self.ratio))
-
         layer_to_blocks = {}
         layer_to_selectable_params = {}
 
@@ -333,13 +330,7 @@ class ReverseCAPS(Selection):
         if total_selectable == 0:
             raise RuntimeError("No selectable blocks remain.")
 
-        selectable_block_sizes = [
-            item["block"]["num_params"]
-            for scored_list in layer_to_blocks.values()
-            for item in scored_list
-        ]
-        min_selectable_block_size = min(selectable_block_sizes)
-        global_budget = max(global_budget, min_selectable_block_size)
+        global_budget = max(1, int(total_selectable * self.ratio))
 
         layer_budget = {}
         layer_fraction = {}
