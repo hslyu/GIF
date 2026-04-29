@@ -88,7 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
     parser.add_argument("--vocab-size", type=int, default=30000)
-    parser.add_argument("--max-text-length", type=int, default=256)
+    parser.add_argument("--max-text-length", type=int, default=80)
     parser.add_argument("--d-model", type=int, default=256)
     parser.add_argument("--nhead", type=int, default=4)
     parser.add_argument("--text-num-layers", type=int, default=4)
