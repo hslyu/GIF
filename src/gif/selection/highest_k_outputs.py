@@ -6,6 +6,7 @@ from .base import Selection
 from .streaming_units import (
     accumulate_unit_scores,
     conv_unit_sum_count,
+    find_residual_output_modules,
     linear_unit_sum_count,
     make_module_info_from_scores,
 )
@@ -47,6 +48,15 @@ class HighestKOutputs(Selection):
 
         return hook
 
+    def generate_residual_hook(self, scored_module):
+        def hook(module, input, output):
+            value_sum, count = conv_unit_sum_count(output)
+            accumulate_unit_scores(
+                self.score_sums, self.score_counts, scored_module, value_sum, count
+            )
+
+        return hook
+
     def register_hooks(self):
         start_index = 0
         self.module_info_list = []
@@ -57,6 +67,8 @@ class HighestKOutputs(Selection):
         self.hook_handle_list.append(
             self.net.register_forward_pre_hook(self.generate_attention_mask_hook())
         )
+        residual_output_modules = find_residual_output_modules(self.net)
+        residual_blocks_registered = set()
         for module in self.net.modules():
             if not self._is_single_layer(module):
                 continue
@@ -65,9 +77,18 @@ class HighestKOutputs(Selection):
 
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 self.module_specs.append((module, start_index))
-                hook_fn = self.generate_hook(start_index)
-                hook_handle = module.register_forward_hook(hook_fn)
-                self.hook_handle_list.append(hook_handle)
+                residual_block = residual_output_modules.get(module)
+                if residual_block is not None:
+                    block_key = id(residual_block)
+                    if block_key not in residual_blocks_registered:
+                        hook_fn = self.generate_residual_hook(module)
+                        hook_handle = residual_block.register_forward_hook(hook_fn)
+                        self.hook_handle_list.append(hook_handle)
+                        residual_blocks_registered.add(block_key)
+                else:
+                    hook_fn = self.generate_hook(start_index)
+                    hook_handle = module.register_forward_hook(hook_fn)
+                    self.hook_handle_list.append(hook_handle)
 
             start_index += module_size
         return self.hook_handle_list

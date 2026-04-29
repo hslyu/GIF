@@ -29,6 +29,46 @@ def conv_unit_sum_count(value):
     return detached.sum(dim=(0, 2, 3)), count
 
 
+def find_residual_output_modules(net):
+    mapping = {}
+    for block in net.modules():
+        residual_path = None
+
+        # Support common residual branch names across models.
+        for residual_attr in ("shortcut", "downsample", "projection"):
+            if hasattr(block, residual_attr):
+                candidate = getattr(block, residual_attr)
+                if isinstance(candidate, nn.Module):
+                    residual_path = candidate
+                    break
+
+        if residual_path is None:
+            continue
+
+        residual_ids = {id(mod) for mod in residual_path.modules()}
+
+        last_conv = None
+        for _, module in reversed(list(block.named_modules())):
+            if not isinstance(module, nn.Conv2d):
+                continue
+            if id(module) in residual_ids:
+                continue
+            last_conv = module
+            break
+
+        # Fallback for models that expose residual-conv attributes directly.
+        if last_conv is None:
+            for name in ("conv3", "conv2", "conv1"):
+                candidate = getattr(block, name, None)
+                if isinstance(candidate, nn.Conv2d):
+                    last_conv = candidate
+                    break
+
+        if last_conv is not None:
+            mapping[last_conv] = block
+    return mapping
+
+
 def accumulate_unit_scores(score_sums, score_counts, module, value_sum, count):
     key = id(module)
     value_sum = value_sum.detach().cpu()
@@ -73,7 +113,7 @@ def make_module_info_from_scores(module, start_index, ratio, score, descending):
     if leftover != 0:
         index = index_list[num_required_indices]
         indices = (
-            np.random.choice(np.arange(num_weights_per_output), leftover, replace=False)
+            np.arange(leftover)
             + num_weights_per_output * index.item()
         )
         selected_index_list = np.concatenate((selected_index_list, indices))
