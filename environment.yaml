@@ -6,14 +6,12 @@ channel_priority: strict
 dependencies:
   - python=3.11
   - pip
-  - numpy>=1.24
-  - scipy>=1.10
-  - matplotlib>=3.8
-  - pillow>=10.0
-  - pytorch>=2.2
-  - torchvision>=0.17
-  - pytest>=8.0
+  - numpy>=1.24,<2.0
+  - matplotlib>=3.8,<3.9
+  - pillow>=10.0,<11.0
+  - pytorch>=2.2,<2.4
+  - torchvision>=0.17,<0.19
+  - pytest>=8.0,<9.0
   - pip:
       - datasets>=2.19
-      - opencv-python>=4.8
       - transformers>=4.40
