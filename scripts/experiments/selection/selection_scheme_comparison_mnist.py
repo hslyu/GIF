@@ -63,27 +63,31 @@ GRADIENT_SELECTOR_NAMES = {
 }
 
 CAPS_STYLE_SELECTOR_NAMES = {"caps", "ekfac_caps", "reverse_caps"}
+EMPTY_SELECTION_ERROR_MARKERS = (
+    "No blocks were selected",
+    "empty parameter subset",
+)
 DEFAULT_PARAM_RATIOS = [
-    # 0.05,
+    0.05,
     0.10,
-    # 0.20,
-    # 0.30,
-    # 0.40,
-    # 0.50,
-    # 0.60,
-    # 0.70,
-    # 0.80,
-    # 0.90,
-    # 1.00,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    0.90,
+    1.00,
 ]
 DEFAULT_SELECTORS = [
-    "caps",
-    "reverse_caps",
-    "highest_k_outputs",
-    "highest_k_gradients",
+    # "caps",
+    # "reverse_caps",
+    # "highest_k_outputs",
+    # "highest_k_gradients",
     "lowest_k_outputs",
     "lowest_k_gradients",
-    "random",
+    # "random",
 ]
 
 
@@ -128,6 +132,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--dropout-prob", type=float, default=0.1)
     parser.add_argument("--save-json", type=Path, default=None)
+    parser.add_argument(
+        "--seed-output-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-seed seed_XXXX.json files.",
+    )
     return parser.parse_args()
 
 
@@ -171,8 +181,8 @@ def build_selector(
     selector_name: str,
     model: nn.Module,
     ratio: float,
-    sampled_inputs: torch.Tensor,
-    sampled_targets: torch.Tensor,
+    selector_inputs: torch.Tensor,
+    selector_targets: torch.Tensor,
     retained_inputs: torch.Tensor,
     retained_targets: torch.Tensor,
     criterion: nn.Module,
@@ -187,8 +197,8 @@ def build_selector(
             lam=args.caps_lam,
         )
         target_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(sampled_inputs, sampled_targets),
-            batch_size=min(len(sampled_inputs), args.batch_size),
+            torch.utils.data.TensorDataset(selector_inputs, selector_targets),
+            batch_size=min(len(selector_inputs), args.batch_size),
             shuffle=False,
         )
         retained_loader = torch.utils.data.DataLoader(
@@ -207,14 +217,25 @@ def build_selector(
     selector = selector_cls(model, ratio)
     selector.register_hooks()
     model.zero_grad(set_to_none=True)
-    moved_inputs = sampled_inputs.to(device)
-    moved_targets = sampled_targets.to(device)
-    if selector_name in GRADIENT_SELECTOR_NAMES:
-        target_loss = criterion(model(moved_inputs), moved_targets)
-        target_loss.backward()
-    else:
-        with torch.no_grad():
-            model(moved_inputs)
+    selector_loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(selector_inputs, selector_targets),
+        batch_size=min(len(selector_inputs), args.batch_size),
+        shuffle=False,
+    )
+    total_selector_examples = len(selector_inputs)
+    for batch_inputs, batch_targets in selector_loader:
+        moved_inputs = batch_inputs.to(device)
+        moved_targets = batch_targets.to(device)
+        if selector_name in GRADIENT_SELECTOR_NAMES:
+            target_loss = criterion(model(moved_inputs), moved_targets)
+            target_loss = target_loss * (
+                len(batch_targets) / total_selector_examples
+            )
+            target_loss.backward()
+            model.zero_grad(set_to_none=True)
+        else:
+            with torch.no_grad():
+                model(moved_inputs)
     selector.remove_hooks()
     model.zero_grad(set_to_none=True)
     return selector
@@ -231,6 +252,11 @@ def sample_target_batches(
     return inputs[permutation], targets[permutation]
 
 
+def is_empty_selection_error(error: RuntimeError) -> bool:
+    message = str(error)
+    return any(marker in message for marker in EMPTY_SELECTION_ERROR_MARKERS)
+
+
 def run_single_selector(
     selector_name: str,
     param_ratio: float,
@@ -240,6 +266,8 @@ def run_single_selector(
     criterion: nn.Module,
     train_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
+    selector_inputs: torch.Tensor,
+    selector_targets: torch.Tensor,
     sampled_inputs: torch.Tensor,
     sampled_targets: torch.Tensor,
     all_target_count: int,
@@ -269,8 +297,8 @@ def run_single_selector(
         selector_name=selector_name,
         model=model,
         ratio=param_ratio,
-        sampled_inputs=sampled_inputs,
-        sampled_targets=sampled_targets,
+        selector_inputs=selector_inputs,
+        selector_targets=selector_targets,
         retained_inputs=retained_inputs,
         retained_targets=retained_targets,
         criterion=criterion,
@@ -333,6 +361,7 @@ def run_single_selector(
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
+        "trial": trial_index,
         "selector": selector_name,
         "param_ratio": param_ratio,
         "selected_params": int(len(index_list)),
@@ -397,23 +426,34 @@ def run_single_trial(
     results: list[dict[str, float]] = []
     for selector_name in args.selectors:
         for param_ratio in args.param_ratios:
-            metrics = run_single_selector(
-                selector_name=selector_name,
-                param_ratio=param_ratio,
-                args=args,
-                trial_index=trial_index,
-                trial_seed=trial_seed,
-                criterion=criterion,
-                train_loader=train_loader,
-                test_loader=test_loader,
-                sampled_inputs=sampled_inputs,
-                sampled_targets=sampled_targets,
-                all_target_count=len(all_target_inputs),
-                retained_inputs=retained_inputs,
-                retained_targets=retained_targets,
-                base_state_dict=base_state_dict,
-                device=device,
-            )
+            try:
+                metrics = run_single_selector(
+                    selector_name=selector_name,
+                    param_ratio=param_ratio,
+                    args=args,
+                    trial_index=trial_index,
+                    trial_seed=trial_seed,
+                    criterion=criterion,
+                    train_loader=train_loader,
+                    test_loader=test_loader,
+                    selector_inputs=all_target_inputs,
+                    selector_targets=all_target_targets,
+                    sampled_inputs=sampled_inputs,
+                    sampled_targets=sampled_targets,
+                    all_target_count=len(all_target_inputs),
+                    retained_inputs=retained_inputs,
+                    retained_targets=retained_targets,
+                    base_state_dict=base_state_dict,
+                    device=device,
+                )
+            except RuntimeError as error:
+                if is_empty_selection_error(error):
+                    print(
+                        f"[trial={trial_index} seed={trial_seed} {selector_name} "
+                        f"ratio={param_ratio:.3f}] Skipped empty selection: {error}"
+                    )
+                    continue
+                raise
             results.append(metrics)
 
     ranked = sorted(
@@ -488,7 +528,7 @@ def main() -> None:
     )
     print(format_metrics("[global] Before:", base_before_metrics))
 
-    save_root = EXPERIMENT_ROOT / "results" / args.model
+    save_root = args.seed_output_dir or EXPERIMENT_ROOT / "results" / args.model
     aggregate_runs: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index

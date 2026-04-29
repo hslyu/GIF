@@ -63,6 +63,10 @@ SELECTION_REGISTRY = {
 
 GRADIENT_SELECTOR_NAMES = {"highest_k_gradients", "lowest_k_gradients"}
 CAPS_STYLE_SELECTOR_NAMES = {"caps", "ekfac_caps", "reverse_caps"}
+EMPTY_SELECTION_ERROR_MARKERS = (
+    "No blocks were selected",
+    "empty parameter subset",
+)
 DEFAULT_PARAM_RATIOS = [
     0.05,
     0.10,
@@ -142,6 +146,12 @@ def parse_args() -> argparse.Namespace:
         default="google/bert_uncased_L-2_H-128_A-2",
     )
     parser.add_argument("--save-json", type=Path, default=None)
+    parser.add_argument(
+        "--seed-output-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-seed seed_XXXX.json files.",
+    )
     return parser.parse_args()
 
 
@@ -171,13 +181,18 @@ def build_model(bundle, args: argparse.Namespace) -> nn.Module:
     )
 
 
+def is_empty_selection_error(error: RuntimeError) -> bool:
+    message = str(error)
+    return any(marker in message for marker in EMPTY_SELECTION_ERROR_MARKERS)
+
+
 def build_selector(
     selector_name: str,
     model: nn.Module,
     ratio: float,
-    sampled_ids: torch.Tensor,
-    sampled_masks: torch.Tensor,
-    sampled_targets: torch.Tensor,
+    selector_ids: torch.Tensor,
+    selector_masks: torch.Tensor,
+    selector_targets: torch.Tensor,
     retained_ids: torch.Tensor,
     retained_masks: torch.Tensor,
     retained_targets: torch.Tensor,
@@ -193,7 +208,7 @@ def build_selector(
             lam=args.caps_lam,
         )
         target_loader = build_loader(
-            sampled_ids, sampled_masks, sampled_targets, args.batch_size
+            selector_ids, selector_masks, selector_targets, args.batch_size
         )
         retained_loader = build_loader(
             retained_ids, retained_masks, retained_targets, args.batch_size
@@ -209,15 +224,22 @@ def build_selector(
     selector = selector_cls(model, ratio)
     selector.register_hooks()
     model.zero_grad(set_to_none=True)
-    moved_ids = sampled_ids.to(device)
-    moved_masks = sampled_masks.to(device)
-    moved_targets = sampled_targets.to(device)
-    if selector_name in GRADIENT_SELECTOR_NAMES:
-        target_loss = criterion(model(moved_ids, moved_masks), moved_targets)
-        target_loss.backward()
-    else:
-        with torch.no_grad():
-            model(moved_ids, moved_masks)
+    selector_loader = build_loader(
+        selector_ids, selector_masks, selector_targets, args.batch_size
+    )
+    total_selector_examples = len(selector_targets)
+    for (batch_ids, batch_masks), batch_targets in selector_loader:
+        moved_ids = batch_ids.to(device)
+        moved_masks = batch_masks.to(device)
+        moved_targets = batch_targets.to(device)
+        if selector_name in GRADIENT_SELECTOR_NAMES:
+            target_loss = criterion(model(moved_ids, moved_masks), moved_targets)
+            target_loss = target_loss * (len(batch_targets) / total_selector_examples)
+            target_loss.backward()
+            model.zero_grad(set_to_none=True)
+        else:
+            with torch.no_grad():
+                model(moved_ids, moved_masks)
     selector.remove_hooks()
     model.zero_grad(set_to_none=True)
     return selector
@@ -248,6 +270,9 @@ def run_single_selector(
     criterion: nn.Module,
     train_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
+    selector_ids: torch.Tensor,
+    selector_masks: torch.Tensor,
+    selector_targets: torch.Tensor,
     sampled_ids: torch.Tensor,
     sampled_masks: torch.Tensor,
     sampled_targets: torch.Tensor,
@@ -280,9 +305,9 @@ def run_single_selector(
         selector_name=selector_name,
         model=model,
         ratio=param_ratio,
-        sampled_ids=sampled_ids,
-        sampled_masks=sampled_masks,
-        sampled_targets=sampled_targets,
+        selector_ids=selector_ids,
+        selector_masks=selector_masks,
+        selector_targets=selector_targets,
         retained_ids=retained_ids,
         retained_masks=retained_masks,
         retained_targets=retained_targets,
@@ -349,6 +374,7 @@ def run_single_selector(
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
+        "trial": trial_index,
         "selector": selector_name,
         "param_ratio": param_ratio,
         "selected_params": int(len(index_list)),
@@ -418,8 +444,8 @@ def run_single_trial(
     results: list[dict[str, float]] = []
     for selector_name in args.selectors:
         for param_ratio in args.param_ratios:
-            results.append(
-                run_single_selector(
+            try:
+                metrics = run_single_selector(
                     selector_name=selector_name,
                     param_ratio=param_ratio,
                     args=args,
@@ -428,6 +454,9 @@ def run_single_trial(
                     criterion=criterion,
                     train_loader=bundle.train_loader,
                     test_loader=bundle.test_loader,
+                    selector_ids=all_target_ids,
+                    selector_masks=all_target_masks,
+                    selector_targets=all_target_targets,
                     sampled_ids=sampled_ids,
                     sampled_masks=sampled_masks,
                     sampled_targets=sampled_targets,
@@ -439,7 +468,15 @@ def run_single_trial(
                     model_factory=model_factory,
                     device=device,
                 )
-            )
+            except RuntimeError as error:
+                if is_empty_selection_error(error):
+                    print(
+                        f"[trial={trial_index} seed={trial_seed} {selector_name} "
+                        f"ratio={param_ratio:.3f}] Skipped empty selection: {error}"
+                    )
+                    continue
+                raise
+            results.append(metrics)
 
     ranked = sorted(
         results,
@@ -513,7 +550,7 @@ def main() -> None:
     )
     print(format_metrics("[global] Before:", base_before_metrics))
 
-    save_root = EXPERIMENT_ROOT / "results" / "newsgroup"
+    save_root = args.seed_output_dir or EXPERIMENT_ROOT / "results" / "newsgroup"
     aggregate_runs: list[dict[str, object]] = []
     for trial_index in range(args.num_trials):
         trial_seed = args.seed + trial_index
