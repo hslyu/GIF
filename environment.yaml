@@ -4,14 +4,15 @@ channels:
   - conda-forge
 channel_priority: strict
 dependencies:
-  - python=3.11
+  - python=3.12.13
   - pip
-  - numpy>=1.24,<2.0
-  - matplotlib>=3.8,<3.9
-  - pillow>=10.0,<11.0
-  - pytorch>=2.2,<2.4
-  - torchvision>=0.17,<0.19
-  - pytest>=8.0,<9.0
+  - numpy=2.4.3
+  - scipy=1.17.1
+  - matplotlib=3.10.8
+  - pillow=12.1.1
+  - pytorch=2.10.0
+  - torchvision=0.25.0
   - pip:
-      - datasets>=2.19
-      - transformers>=4.40
+      - datasets==4.8.4
+      - transformers==5.5.4
+      - pytest==9.0.3
