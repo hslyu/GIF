@@ -69,25 +69,25 @@ EMPTY_SELECTION_ERROR_MARKERS = (
 )
 DEFAULT_PARAM_RATIOS = [
     0.05,
-    # 0.10,
+    0.10,
     0.20,
-    # 0.30,
-    # 0.40,
-    # 0.50,
-    # 0.60,
-    # 0.70,
-    # 0.80,
-    # 0.90,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    0.90,
     1.00,
 ]
 DEFAULT_SELECTORS = [
-    # "caps",
-    # "reverse_caps",
+    "caps",
+    "reverse_caps",
     "highest_k_outputs",
-    # "highest_k_gradients",
+    "highest_k_gradients",
     "lowest_k_outputs",
-    # "lowest_k_gradients",
-    # "random",
+    "lowest_k_gradients",
+    "random",
 ]
 
 
@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
     parser.add_argument("--num-target-batches", type=int, default=10)
-    parser.add_argument("--num-hvp-batches", type=int, default=3)
+    parser.add_argument("--num-hvp-batches", type=int, default=2)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -128,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
-    parser.add_argument("--max-iter", type=int, default=200)
+    parser.add_argument("--max-iter", type=int, default=80)
     parser.add_argument("--edit-scale", type=float, default=0.1)
     parser.add_argument("--max-update-steps", type=int, default=200)
     parser.add_argument("--target-self-acc", type=float, default=0.1)
