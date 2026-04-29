@@ -158,7 +158,7 @@ def format_metrics(prefix: str, metrics: dict[str, float]) -> str:
         f"{prefix} "
         f"retain_acc={metrics['retain_acc']:.2f}% | "
         f"self_acc={metrics['self_acc']:.2f}% | "
-        f"score={metrics['score']:.4f} | "
-        f"retain_loss={metrics['retain_loss']:.4f} | "
-        f"self_loss={metrics['self_loss']:.4f}"
+        f"score={metrics['score']:.2f} | "
+        f"retain_loss={metrics['retain_loss']:.2f} | "
+        f"self_loss={metrics['self_loss']:.2f}"
     )

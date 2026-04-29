@@ -374,10 +374,12 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
+    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[trial={trial_index} seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f} "
+            f"step={reported_step} edit_scale={args.edit_scale:.3f}] {status}:",
             selected_metrics,
         )
     )
@@ -449,7 +451,7 @@ def run_single_trial(
             except RuntimeError as error:
                 if is_empty_selection_error(error):
                     print(
-                        f"[trial={trial_index} seed={trial_seed} {selector_name} "
+                        f"[seed={trial_seed} {selector_name} "
                         f"ratio={param_ratio:.3f}] Skipped empty selection: {error}"
                     )
                     continue
@@ -465,18 +467,6 @@ def run_single_trial(
         ),
         reverse=True,
     )
-
-    print("\nTop results")
-    for row in ranked[: min(10, len(ranked))]:
-        print(
-            f"{row['selector']:>22} | ratio={row['param_ratio']:.3f} | "
-            f"reached_target={int(row['reached_target'])} | "
-            f"retain_acc={row['retain_acc']:.2f}% | "
-            f"self_acc={row['self_acc']:.2f}% | "
-            f"target_step={row['target_step']} | "
-            f"selected={row['selected_params']} | "
-            f"trial={row['trial']} | seed={row['seed']}"
-        )
 
     payload: dict[str, object] = {
         "config": {

@@ -489,10 +489,12 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
+    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[trial={trial_index} seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f} "
+            f"step={reported_step} edit_scale={args.edit_scale:.3f}] {status}:",
             selected_metrics,
         )
     )
@@ -592,7 +594,7 @@ def run_single_trial(
             except RuntimeError as error:
                 if is_empty_selection_error(error):
                     print(
-                        f"[trial={trial_index} seed={trial_seed} {selector_name} "
+                        f"[seed={trial_seed} {selector_name} "
                         f"ratio={param_ratio:.3f}] Skipped empty selection: {error}"
                     )
                     continue
