@@ -2,7 +2,13 @@ import numpy as np
 import torch
 from torch import nn
 
-from .base import Selection, _ModuleInfo
+from .base import Selection
+from .streaming_units import (
+    accumulate_unit_scores,
+    conv_unit_sum_count,
+    linear_unit_sum_count,
+    make_module_info_from_scores,
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -15,87 +21,51 @@ class LowestKGradients(Selection):
         self.ratio = ratio
         self.hook_handle_list = []
         self.module_info_list = []
+        self.attention_mask = None
+        self.score_sums = {}
+        self.score_counts = {}
+        self.module_specs = []
+        self.finalized = False
+
+    def generate_attention_mask_hook(self):
+        def hook(module, input):
+            self.attention_mask = None
+            if len(input) > 1 and torch.is_tensor(input[1]):
+                self.attention_mask = input[1].detach()
+
+        return hook
 
     def generate_hook(self, start_index):
         def hook(module, grad_input, grad_output):
-            module_size = sum(p.numel() for p in module.parameters() if p.requires_grad)
-            num_params = int(module_size * self.ratio)
-            module_info = _ModuleInfo(module, start_index, num_params)
-            selected_index_list = np.empty(0, dtype=int)
-
             if isinstance(module, nn.Linear):
-                # Compute the allotted number of neurons for each rows
-                num_weights_per_output = module.weight.size(1)
-                # Support both [batch, out] and [batch, seq, out] gradients.
-                reduce_dims = tuple(range(grad_output[0].ndim - 1))
-                batch_abs_mean = torch.abs(
-                    torch.mean(grad_output[0], dim=reduce_dims)
+                value_sum, count = linear_unit_sum_count(
+                    grad_output[0], self.attention_mask
                 )
             else:  # isinstance(module, nn.Conv2d):
-                num_weights_per_output = (
-                    module.weight.size(1)
-                    * module.weight.size(2)
-                    * module.weight.size(3)
-                )
-                # Get list of indices of neurons with highest activation
-                batch_abs_mean = torch.abs(torch.mean(grad_output[0], (0, 2, 3)))
-
-            if module.bias is not None:
-                num_required_indices = num_params // (num_weights_per_output + 1)
-                leftover = num_params % (num_weights_per_output + 1)
-            else:
-                num_required_indices = num_params // (num_weights_per_output)
-                leftover = num_params % (num_weights_per_output)
-
-            index_list = torch.sort(batch_abs_mean, descending=False, stable=True)[1]
-            # Add the indices of weights
-            for index in index_list[:num_required_indices]:
-                selected_index_list = np.concatenate(
-                    (
-                        selected_index_list,
-                        np.arange(num_weights_per_output)
-                        + num_weights_per_output * index.item(),
-                    )
-                )
-
-            # Add the indices of weights for the leftover neurons
-            if leftover != 0:
-                index = index_list[num_required_indices]
-                # random pick leftover number of neurons
-                indices = (
-                    np.random.choice(
-                        np.arange(num_weights_per_output), leftover, replace=False
-                    )
-                    + num_weights_per_output * index.item()
-                )
-                selected_index_list = np.concatenate((selected_index_list, indices))
-
-            module_info.weight_index_list = selected_index_list
-
-            if module.bias is not None:
-                module_info.bias_index_list = (
-                    index_list[:num_required_indices].detach().cpu().numpy()
-                )
-                # Add the indices of the bias
-                selected_index_list = np.concatenate(
-                    (
-                        selected_index_list,
-                        module_info.bias_index_list + module.weight.numel(),
-                    )
-                )
-            module_info.index_list = selected_index_list
-            self.module_info_list.append(module_info)
+                value_sum, count = conv_unit_sum_count(grad_output[0])
+            accumulate_unit_scores(
+                self.score_sums, self.score_counts, module, value_sum, count
+            )
 
         return hook
 
     def register_hooks(self):
         start_index = 0
+        self.module_info_list = []
+        self.score_sums = {}
+        self.score_counts = {}
+        self.module_specs = []
+        self.finalized = False
+        self.hook_handle_list.append(
+            self.net.register_forward_pre_hook(self.generate_attention_mask_hook())
+        )
         for module in self.net.modules():
             if not self._is_single_layer(module):
                 continue
 
             num_param = sum(p.numel() for p in module.parameters() if p.requires_grad)
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+                self.module_specs.append((module, start_index))
                 hook_fn = self.generate_hook(start_index)
                 hook_handle = module.register_full_backward_hook(hook_fn)
                 self.hook_handle_list.append(hook_handle)
@@ -106,11 +76,30 @@ class LowestKGradients(Selection):
     def remove_hooks(self):
         for handle in self.hook_handle_list:
             handle.remove()
+        self.hook_handle_list = []
+        self.attention_mask = None
+
+    def finalize(self):
+        if self.finalized:
+            return
+        self.module_info_list = []
+        for module, start_index in self.module_specs:
+            key = id(module)
+            if key not in self.score_sums:
+                continue
+            score = torch.abs(self.score_sums[key] / max(self.score_counts[key], 1))
+            self.module_info_list.append(
+                make_module_info_from_scores(
+                    module, start_index, self.ratio, score, descending=False
+                )
+            )
+        self.finalized = True
 
     def _is_single_layer(self, module):
         return list(module.children()) == []
 
     def get_parameters(self):
+        self.finalize()
         selected_parameter_indices = np.empty(0, dtype=int)
         for info in self.module_info_list:
             selected_parameter_indices = np.concatenate(
@@ -120,6 +109,7 @@ class LowestKGradients(Selection):
         return selected_parameter_indices
 
     def update_network(self, vectorized_influence):
+        self.finalize()
         assert sum(info.num_params for info in self.module_info_list) == len(
             vectorized_influence
         ), f"length of vectorized_influence {len(vectorized_influence)} is not equal to the number of seleceted parameters {sum(info.num_params for info in self.module_info_list)}"
