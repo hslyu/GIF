@@ -27,7 +27,7 @@ class MNISTDataLoader:
     def get_data_loaders(self):
         collate_fn = self.one_hot_encoder if self.one_hot else None
 
-        transform = transforms.Compose(
+        train_transform = transforms.Compose(
             [
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -35,13 +35,20 @@ class MNISTDataLoader:
                 transforms.Lambda(lambda x: x.view(-1) if self.flatten else x),
             ]
         )
+        test_transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.1307,), (0.3081,)),
+                transforms.Lambda(lambda x: x.view(-1) if self.flatten else x),
+            ]
+        )
         # Load the MNIST dataset
         train_dataset = datasets.MNIST(
-            root=self.root, train=True, download=True, transform=transform
+            root=self.root, train=True, download=True, transform=train_transform
         )
 
         test_dataset = datasets.MNIST(
-            root=self.root, train=False, download=True, transform=transform
+            root=self.root, train=False, download=True, transform=test_transform
         )
 
         test_loader = torch.utils.data.DataLoader(
