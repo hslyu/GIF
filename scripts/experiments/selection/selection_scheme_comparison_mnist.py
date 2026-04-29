@@ -177,6 +177,48 @@ def default_save_path(args: argparse.Namespace) -> Path:
     )
 
 
+def result_key(row: dict[str, object]) -> tuple[str, float]:
+    return str(row["selector"]), float(row["param_ratio"])
+
+
+def rank_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted(
+        results,
+        key=lambda item: (
+            item["reached_target"],
+            item["retain_acc"],
+            -item["target_step"] if item["target_step"] is not None else float("-inf"),
+        ),
+        reverse=True,
+    )
+
+
+def merge_trial_payload(
+    trial_path: Path,
+    trial_payload: dict[str, object],
+) -> tuple[dict[str, object], bool]:
+    if not trial_path.exists():
+        return trial_payload, False
+
+    existing_payload = json.loads(trial_path.read_text())
+    existing_results = {
+        result_key(row): row for row in existing_payload.get("results", [])
+    }
+
+    for row in trial_payload["results"]:
+        existing_results[result_key(row)] = row
+
+    merged_payload = {
+        **existing_payload,
+        "config": {
+            **existing_payload.get("config", {}),
+            **trial_payload["config"],
+        },
+        "results": rank_results(list(existing_results.values())),
+    }
+    return merged_payload, True
+
+
 def build_selector(
     selector_name: str,
     model: nn.Module,
@@ -457,17 +499,9 @@ def run_single_trial(
                 raise
             results.append(metrics)
 
-    ranked = sorted(
-        results,
-        key=lambda item: (
-            item["reached_target"],
-            item["retain_acc"],
-            -item["target_step"] if item["target_step"] is not None else float("-inf"),
-        ),
-        reverse=True,
-    )
+    ranked = rank_results(results)
 
-    payload: dict[str, object] = {
+    trial_payload: dict[str, object] = {
         "config": {
             "seed": trial_seed,
             "model": args.model,
@@ -487,9 +521,11 @@ def run_single_trial(
     }
     trial_path = save_dir / f"seed_{trial_seed:04d}.json"
     trial_path.parent.mkdir(parents=True, exist_ok=True)
-    trial_path.write_text(json.dumps(payload, indent=2))
-    print(f"Saved results to {trial_path}")
-    return payload
+    trial_payload, updated_existing = merge_trial_payload(trial_path, trial_payload)
+    trial_path.write_text(json.dumps(trial_payload, indent=2))
+    action = "Updated existing" if updated_existing else "Saved new"
+    print(f"{action} results at {trial_path}")
+    return trial_payload
 
 
 def main() -> None:
