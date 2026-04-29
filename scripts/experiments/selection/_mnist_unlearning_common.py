@@ -154,10 +154,21 @@ def f1_unlearning_score(self_acc: float, retain_acc: float) -> float:
 
 
 def format_metrics(prefix: str, metrics: dict[str, float]) -> str:
+    step_text = ""
+    if "reported_step" in metrics:
+        try:
+            step_text = f"step={int(metrics['reported_step'])} | "
+        except (TypeError, ValueError):
+            step_text = f"step={metrics['reported_step']} | "
+    edit_scale_text = ""
+    if "edit_scale" in metrics:
+        edit_scale_text = f"edit_scale={metrics['edit_scale']:.3f} | "
     return (
         f"{prefix} "
         f"retain_acc={metrics['retain_acc']:.2f}% | "
         f"self_acc={metrics['self_acc']:.2f}% | "
+        f"{step_text}"
+        f"{edit_scale_text}"
         f"score={metrics['score']:.2f} | "
         f"retain_loss={metrics['retain_loss']:.2f} | "
         f"self_loss={metrics['self_loss']:.2f}"

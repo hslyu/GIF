@@ -84,6 +84,27 @@ def build_total_loss(
     return criterion(model(input_ids, attention_masks), targets)
 
 
+def trim_to_batch_length(
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if attention_masks.ndim != 2:
+        return input_ids, attention_masks
+    max_length = int(attention_masks.sum(dim=1).max().item())
+    max_length = max(max_length, 1)
+    return input_ids[:, :max_length], attention_masks[:, :max_length]
+
+
+def sort_by_length(
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
+    targets: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    lengths = attention_masks.sum(dim=1)
+    order = torch.argsort(lengths, stable=True)
+    return input_ids[order], attention_masks[order], targets[order]
+
+
 def _cat_padded(tensors: list[torch.Tensor], pad_value: int = 0) -> torch.Tensor:
     if not tensors:
         raise RuntimeError("Cannot concatenate an empty tensor list.")
@@ -217,6 +238,38 @@ def evaluate_unlearning(
     return _build_metrics(self_loss, self_acc, retain_loss_value, retain_acc)
 
 
+def evaluate_target_accuracy(
+    model: nn.Module,
+    input_ids: torch.Tensor,
+    attention_masks: torch.Tensor,
+    targets: torch.Tensor,
+    device: torch.device,
+    batch_size: int,
+) -> float:
+    correct = 0
+    total = 0
+
+    with torch.inference_mode():
+        for start in range(0, len(targets), batch_size):
+            batch_ids = input_ids[start : start + batch_size].to(
+                device, non_blocking=True
+            )
+            batch_masks = attention_masks[start : start + batch_size].to(
+                device, non_blocking=True
+            )
+            batch_targets = targets[start : start + batch_size].to(
+                device, non_blocking=True
+            )
+            batch_ids, batch_masks = trim_to_batch_length(batch_ids, batch_masks)
+            outputs = model(batch_ids, batch_masks)
+            correct += outputs.argmax(dim=1).eq(batch_targets).sum().item()
+            total += batch_targets.size(0)
+
+    if total == 0:
+        raise RuntimeError("Target accuracy evaluation received zero examples.")
+    return 100.0 * correct / total
+
+
 def _build_metrics(
     self_loss: float,
     self_acc: float,
@@ -243,10 +296,21 @@ def _build_metrics(
 
 
 def format_metrics(prefix: str, metrics: dict[str, float]) -> str:
+    step_text = ""
+    if "reported_step" in metrics:
+        try:
+            step_text = f"step={int(metrics['reported_step'])} | "
+        except (TypeError, ValueError):
+            step_text = f"step={metrics['reported_step']} | "
+    edit_scale_text = ""
+    if "edit_scale" in metrics:
+        edit_scale_text = f"edit_scale={metrics['edit_scale']:.3f} | "
     return (
         f"{prefix} "
         f"retain_acc={metrics['retain_acc']:.2f}% | "
         f"self_acc={metrics['self_acc']:.2f}% | "
+        f"{step_text}"
+        f"{edit_scale_text}"
         f"score={metrics['score']:.2f} | "
         f"retain_loss={metrics['retain_loss']:.2f} | "
         f"self_loss={metrics['self_loss']:.2f}"

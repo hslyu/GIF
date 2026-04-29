@@ -473,6 +473,7 @@ def run_single_selector(
 
     retain_acc = selected_metrics["retain_acc"]
     self_acc = selected_metrics["self_acc"]
+    reported_step = target_step if target_step is not None else args.max_update_steps
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
@@ -482,6 +483,8 @@ def run_single_selector(
         "selected_params": int(len(index_list)),
         "reached_target": reached_target,
         "target_step": target_step,
+        "reported_step": reported_step,
+        "edit_scale": args.edit_scale,
         "target_self_acc_threshold": args.target_self_acc,
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
@@ -489,12 +492,10 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
-    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f} "
-            f"step={reported_step} edit_scale={args.edit_scale:.3f}] {status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
             selected_metrics,
         )
     )

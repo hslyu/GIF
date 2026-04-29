@@ -69,25 +69,25 @@ EMPTY_SELECTION_ERROR_MARKERS = (
 )
 DEFAULT_PARAM_RATIOS = [
     0.05,
-    0.10,
+    # 0.10,
     0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90,
+    # 0.30,
+    # 0.40,
+    # 0.50,
+    # 0.60,
+    # 0.70,
+    # 0.80,
+    # 0.90,
     1.00,
 ]
 DEFAULT_SELECTORS = [
-    "caps",
-    "reverse_caps",
+    # "caps",
+    # "reverse_caps",
     "highest_k_outputs",
-    "highest_k_gradients",
+    # "highest_k_gradients",
     "lowest_k_outputs",
-    "lowest_k_gradients",
-    "random",
+    # "lowest_k_gradients",
+    # "random",
 ]
 
 
@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
     parser.add_argument("--num-target-batches", type=int, default=10)
-    parser.add_argument("--num-hvp-batches", type=int, default=4)
+    parser.add_argument("--num-hvp-batches", type=int, default=3)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument("--dataset-id", type=str, default=None)
-    parser.add_argument("--max-text-length", type=int, default=256)
+    parser.add_argument("--max-text-length", type=int, default=80)
     parser.add_argument("--max-vocab-size", type=int, default=30000)
     parser.add_argument("--min-token-freq", type=int, default=2)
     parser.add_argument("--d-model", type=int, default=256)
@@ -306,6 +306,7 @@ def run_single_selector(
     hvp_ids: torch.Tensor,
     hvp_masks: torch.Tensor,
     hvp_targets: torch.Tensor,
+    before_metrics: dict[str, float],
     base_state_dict: dict[str, torch.Tensor],
     model_factory,
     device: torch.device,
@@ -313,10 +314,6 @@ def run_single_selector(
     model = model_factory().to(device)
     model.load_state_dict(base_state_dict)
     model.eval()
-
-    before_metrics = evaluate_unlearning(
-        model, test_loader, criterion, args.target_label, device
-    )
 
     total_loss = build_total_loss(
         model,
@@ -372,48 +369,30 @@ def run_single_selector(
         )
     normalized_update = influence / norm
 
-    def run_update_direction(direction: float, direction_name: str) -> dict[str, object]:
-        model.load_state_dict(base_state_dict)
-        target_metrics = None
-        target_state = None
-        target_step = None
-        signed_update = normalized_update * args.edit_scale * direction
+    target_metrics: dict[str, float] | None = None
+    target_step = None
+    final_metrics = None
+    signed_update = normalized_update * args.edit_scale
+    for step in range(1, args.max_update_steps + 1):
+        selector.update_network(signed_update)
+        final_metrics = evaluate_unlearning(
+            model, test_loader, criterion, args.target_label, device
+        )
+        if final_metrics["self_acc"] <= args.target_self_acc:
+            target_step = step
+            target_metrics = deepcopy(final_metrics)
+            break
 
-        for step in range(1, args.max_update_steps + 1):
-            selector.update_network(signed_update)
-            current_metrics = evaluate_unlearning(
-                model, test_loader, criterion, args.target_label, device
-            )
-            if current_metrics["self_acc"] <= args.target_self_acc:
-                target_metrics = current_metrics
-                target_state = deepcopy(model.state_dict())
-                target_step = step
-                break
-
-        reached_target = target_metrics is not None
-        if reached_target:
-            model.load_state_dict(target_state)
-            metrics = target_metrics
-        else:
-            metrics = evaluate_unlearning(
-                model, test_loader, criterion, args.target_label, device
-            )
-
-        return {
-            "metrics": metrics,
-            "reached_target": reached_target,
-            "target_step": target_step,
-            "update_direction": direction_name,
-        }
-
-    selected_run = run_update_direction(-1.0, "negative")
-
-    selected_metrics = selected_run["metrics"]
-    reached_target = selected_run["reached_target"]
-    target_step = selected_run["target_step"]
+    reached_target = target_step is not None
+    selected_metrics = target_metrics if target_metrics is not None else final_metrics
+    if selected_metrics is None:
+        selected_metrics = evaluate_unlearning(
+            model, test_loader, criterion, args.target_label, device
+        )
 
     retain_acc = selected_metrics["retain_acc"]
     self_acc = selected_metrics["self_acc"]
+    reported_step = target_step if target_step is not None else args.max_update_steps
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
@@ -423,7 +402,8 @@ def run_single_selector(
         "selected_params": int(len(index_list)),
         "reached_target": reached_target,
         "target_step": target_step,
-        "update_direction": selected_run["update_direction"],
+        "reported_step": reported_step,
+        "edit_scale": args.edit_scale,
         "target_self_acc_threshold": args.target_self_acc,
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
@@ -431,14 +411,10 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
-    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[seed={trial_seed} {selector_name} "
-            f"ratio={param_ratio:.3f} direction={selected_run['update_direction']} "
-            f"step={reported_step} edit_scale={args.edit_scale:.3f}] "
-            f"{status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
             selected_metrics,
         )
     )
@@ -493,7 +469,11 @@ def run_single_trial(
 
     base_model = build_model(bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)
+    base_model.eval()
     base_state = deepcopy(base_model.state_dict())
+    before_metrics = evaluate_unlearning(
+        base_model, bundle.test_loader, criterion, args.target_label, device
+    )
     model_factory = lambda: build_model(bundle, args)
 
     results: list[dict[str, float]] = []
@@ -522,6 +502,7 @@ def run_single_trial(
                     hvp_ids=hvp_ids,
                     hvp_masks=hvp_masks,
                     hvp_targets=hvp_targets,
+                    before_metrics=before_metrics,
                     base_state_dict=base_state,
                     model_factory=model_factory,
                     device=device,

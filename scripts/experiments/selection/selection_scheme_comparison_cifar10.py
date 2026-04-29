@@ -48,7 +48,6 @@ from gif.selection import (  # noqa: E402
 
 SELECTION_REGISTRY = {
     "caps": CAPS,
-    "ekfac_caps": EKFACCAPS,
     "reverse_caps": ReverseCAPS,
     "highest_k_outputs": HighestKOutputs,
     "highest_k_gradients": HighestKGradients,
@@ -68,27 +67,33 @@ EMPTY_SELECTION_ERROR_MARKERS = (
     "empty parameter subset",
 )
 DEFAULT_PARAM_RATIOS = [
-    0.05,
+    # 0.05,
     0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90,
+    # 0.20,
+    # 0.30,
+    # 0.40,
+    # 0.50,
+    # 0.60,
+    # 0.70,
+    # 0.80,
+    # 0.90,
     1.00,
 ]
 DEFAULT_SELECTORS = [
-    # "caps",
-    # "reverse_caps",
-    # "highest_k_outputs",
-    # "highest_k_gradients",
+    "highest_k_outputs",
+    "highest_k_gradients",
     "lowest_k_outputs",
-    "lowest_k_gradients",
-    # "random",
+    # "lowest_k_gradients",
+    "caps",
+    # "ekfac_caps",
+    "reverse_caps",
+    "random",
 ]
+DEFAULT_SELECTORS = [
+    selector for selector in DEFAULT_SELECTORS if selector in SELECTION_REGISTRY
+]
+if not DEFAULT_SELECTORS:
+    DEFAULT_SELECTORS = sorted(SELECTION_REGISTRY.keys())
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
-    parser.add_argument("--edit-scale", type=float, default=0.1)
+    parser.add_argument("--edit-scale", type=float, default=0.02)
     parser.add_argument("--max-update-steps", type=int, default=200)
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
@@ -158,6 +163,48 @@ def default_save_path(args: argparse.Namespace) -> Path:
         / "cifar10_resnet18"
         / f"seed_{args.seed:04d}_trials_{args.num_trials:03d}.json"
     )
+
+
+def result_key(row: dict[str, object]) -> tuple[str, float]:
+    return str(row["selector"]), float(row["param_ratio"])
+
+
+def rank_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted(
+        results,
+        key=lambda item: (
+            item["reached_target"],
+            item["retain_acc"],
+            -item["target_step"] if item["target_step"] is not None else float("-inf"),
+        ),
+        reverse=True,
+    )
+
+
+def merge_trial_payload(
+    trial_path: Path,
+    trial_payload: dict[str, object],
+) -> tuple[dict[str, object], bool]:
+    if not trial_path.exists():
+        return trial_payload, False
+
+    existing_payload = json.loads(trial_path.read_text())
+    existing_results = {
+        result_key(row): row for row in existing_payload.get("results", [])
+    }
+
+    for row in trial_payload["results"]:
+        existing_results[result_key(row)] = row
+
+    merged_payload = {
+        **existing_payload,
+        "config": {
+            **existing_payload.get("config", {}),
+            **trial_payload["config"],
+        },
+        "results": rank_results(list(existing_results.values())),
+    }
+    return merged_payload, True
 
 
 def build_model() -> nn.Module:
@@ -469,6 +516,7 @@ def run_single_selector(
 
     retain_acc = selected_metrics["retain_acc"]
     self_acc = selected_metrics["self_acc"]
+    reported_step = target_step if target_step is not None else args.max_update_steps
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
@@ -478,6 +526,8 @@ def run_single_selector(
         "selected_params": int(len(index_list)),
         "reached_target": reached_target,
         "target_step": target_step,
+        "reported_step": reported_step,
+        "edit_scale": args.edit_scale,
         "target_self_acc_threshold": args.target_self_acc,
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
@@ -485,12 +535,10 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
-    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f} "
-            f"step={reported_step} edit_scale={args.edit_scale:.3f}] {status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
             selected_metrics,
         )
     )
@@ -597,15 +645,7 @@ def run_single_trial(
                 raise
             results.append(metrics)
 
-    ranked = sorted(
-        results,
-        key=lambda item: (
-            item["reached_target"],
-            item["retain_acc"],
-            -item["target_step"] if item["target_step"] is not None else float("-inf"),
-        ),
-        reverse=True,
-    )
+    ranked = rank_results(results)
 
     trial_payload: dict[str, object] = {
         "config": {
@@ -630,8 +670,10 @@ def run_single_trial(
     }
     trial_path = save_dir / f"seed_{trial_seed:04d}.json"
     trial_path.parent.mkdir(parents=True, exist_ok=True)
+    trial_payload, updated_existing = merge_trial_payload(trial_path, trial_payload)
     trial_path.write_text(json.dumps(trial_payload, indent=2))
-    print(f"Saved results to {trial_path}")
+    action = "Updated existing" if updated_existing else "Saved new"
+    print(f"{action} results at {trial_path}")
     return trial_payload
 
 

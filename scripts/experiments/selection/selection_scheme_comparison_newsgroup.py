@@ -280,6 +280,7 @@ def run_single_selector(
     retained_ids: torch.Tensor,
     retained_masks: torch.Tensor,
     retained_targets: torch.Tensor,
+    before_metrics: dict[str, float],
     base_state_dict: dict[str, torch.Tensor],
     model_factory,
     device: torch.device,
@@ -287,10 +288,6 @@ def run_single_selector(
     model = model_factory().to(device)
     model.load_state_dict(base_state_dict)
     model.eval()
-
-    before_metrics = evaluate_unlearning(
-        model, test_loader, criterion, args.target_label, device
-    )
 
     total_loss = build_total_loss(
         model,
@@ -346,31 +343,29 @@ def run_single_selector(
         )
     normalized_update = influence / norm
 
-    target_metrics = None
-    target_state = None
+    target_metrics: dict[str, float] | None = None
     target_step = None
+    final_metrics = None
     for step in range(1, args.max_update_steps + 1):
         selector.update_network(normalized_update * args.edit_scale)
-        current_metrics = evaluate_unlearning(
+        final_metrics = evaluate_unlearning(
             model, test_loader, criterion, args.target_label, device
         )
-        if current_metrics["self_acc"] <= args.target_self_acc:
-            target_metrics = current_metrics
-            target_state = deepcopy(model.state_dict())
+        if final_metrics["self_acc"] <= args.target_self_acc:
             target_step = step
+            target_metrics = deepcopy(final_metrics)
             break
 
-    reached_target = target_metrics is not None
-    if reached_target:
-        model.load_state_dict(target_state)
-        selected_metrics = target_metrics
-    else:
+    reached_target = target_step is not None
+    selected_metrics = target_metrics if target_metrics is not None else final_metrics
+    if selected_metrics is None:
         selected_metrics = evaluate_unlearning(
             model, test_loader, criterion, args.target_label, device
         )
 
     retain_acc = selected_metrics["retain_acc"]
     self_acc = selected_metrics["self_acc"]
+    reported_step = target_step if target_step is not None else args.max_update_steps
     selected_metrics = {
         **selected_metrics,
         "seed": trial_seed,
@@ -380,6 +375,8 @@ def run_single_selector(
         "selected_params": int(len(index_list)),
         "reached_target": reached_target,
         "target_step": target_step,
+        "reported_step": reported_step,
+        "edit_scale": args.edit_scale,
         "target_self_acc_threshold": args.target_self_acc,
         "before_self_acc": before_metrics["self_acc"],
         "before_retain_acc": before_metrics["retain_acc"],
@@ -387,12 +384,10 @@ def run_single_selector(
         "retain_acc_drop": before_metrics["retain_acc"] - retain_acc,
         "self_acc_drop": before_metrics["self_acc"] - self_acc,
     }
-    reported_step = target_step if target_step is not None else args.max_update_steps
     status = "Target" if reached_target else "Missed"
     print(
         format_metrics(
-            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f} "
-            f"step={reported_step} edit_scale={args.edit_scale:.3f}] {status}:",
+            f"[seed={trial_seed} {selector_name} ratio={param_ratio:.3f}] {status}:",
             selected_metrics,
         )
     )
@@ -440,7 +435,11 @@ def run_single_trial(
 
     base_model = build_model(bundle, args).to(device)
     load_checkpoint(base_model, args.checkpoint, device)
+    base_model.eval()
     base_state = deepcopy(base_model.state_dict())
+    before_metrics = evaluate_unlearning(
+        base_model, bundle.test_loader, criterion, args.target_label, device
+    )
     model_factory = lambda: build_model(bundle, args)
 
     results: list[dict[str, float]] = []
@@ -466,6 +465,7 @@ def run_single_trial(
                     retained_ids=retained_ids,
                     retained_masks=retained_masks,
                     retained_targets=retained_targets,
+                    before_metrics=before_metrics,
                     base_state_dict=base_state,
                     model_factory=model_factory,
                     device=device,
