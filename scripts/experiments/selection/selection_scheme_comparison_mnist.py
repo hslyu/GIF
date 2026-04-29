@@ -81,13 +81,13 @@ DEFAULT_PARAM_RATIOS = [
     1.00,
 ]
 DEFAULT_SELECTORS = [
-    # "caps",
-    # "reverse_caps",
+    "caps",
+    "reverse_caps",
     "highest_k_outputs",
-    # "highest_k_gradients",
+    "highest_k_gradients",
     "lowest_k_outputs",
     "lowest_k_gradients",
-    # "random",
+    "random",
 ]
 
 
@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--edit-scale", type=float, default=0.1)
-    parser.add_argument("--max-update-steps", type=int, default=200)
+    parser.add_argument("--max-update-steps", type=int, default=80)
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument("--hidden-size", type=int, default=512)
@@ -186,7 +186,7 @@ def rank_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
         results,
         key=lambda item: (
             item["reached_target"],
-            item["retain_acc"] if item["reached_target"] else item["score"],
+            item["retain_acc"],
             -item["target_step"] if item["target_step"] is not None else float("-inf"),
         ),
         reverse=True,
