@@ -2,6 +2,7 @@ name: gif
 channels:
   - pytorch
   - conda-forge
+channel_priority: strict
 dependencies:
   - python=3.11
   - pip
@@ -16,4 +17,3 @@ dependencies:
       - datasets>=2.19
       - opencv-python>=4.8
       - transformers>=4.40
-      - -e .
