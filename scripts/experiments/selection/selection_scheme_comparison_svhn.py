@@ -169,7 +169,7 @@ def rank_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
         results,
         key=lambda item: (
             item["reached_target"],
-            item["retain_acc"],
+            item["retain_acc"] if item["reached_target"] else item["score"],
             -item["target_step"] if item["target_step"] is not None else float("-inf"),
         ),
         reverse=True,
