@@ -263,6 +263,24 @@ def _compute_corrected_diagonal(
     return corrected
 
 
+def _compute_corrected_diagonal_with_count(
+    info: KFACModuleInfo,
+    inputs: torch.Tensor,
+    grad_outputs: torch.Tensor,
+    activation_basis: torch.Tensor,
+    gradient_basis: torch.Tensor,
+) -> tuple[torch.Tensor, int]:
+    activations, gradients = _prepare_module_samples(info, inputs, grad_outputs)
+    activation_kfe = activations @ activation_basis
+    gradient_kfe = gradients @ gradient_basis
+    corrected = torch.einsum(
+        "ni,nj->ij",
+        gradient_kfe.square(),
+        activation_kfe.square(),
+    ) / max(activations.shape[0], 1)
+    return corrected, activations.shape[0]
+
+
 def _collect_ekfac_batch_stats(
     model: nn.Module,
     module_infos: list[KFACModuleInfo],
@@ -320,6 +338,94 @@ def _collect_ekfac_batch_stats(
         model.zero_grad(set_to_none=True)
         collector.remove_hooks()
         model.train(was_training)
+
+
+def _collect_ekfac_loader_stats(
+    model: nn.Module,
+    module_infos: list[KFACModuleInfo],
+    criterion: nn.Module,
+    dataloader: DataLoader,
+    *,
+    device: torch.device,
+    max_batches: int | None = None,
+) -> dict[str, EKFACFactorStats]:
+    collector = KFACFactorCollector(model)
+    covariance_stats = collector.accumulate_loader(
+        dataloader=dataloader,
+        criterion=criterion,
+        device=device,
+        max_batches=max_batches,
+    )
+    bases = {
+        name: (
+            _ekfac_eigendecomposition(stats.activation_cov)[1],
+            _ekfac_eigendecomposition(stats.gradient_cov)[1],
+        )
+        for name, stats in covariance_stats.items()
+    }
+
+    accumulated_diagonal: dict[str, torch.Tensor] = {}
+    accumulated_samples: dict[str, int] = {}
+    was_training = model.training
+    collector.register_hooks()
+    model.eval()
+    try:
+        for batch_index, batch in enumerate(dataloader):
+            if max_batches is not None and batch_index >= max_batches:
+                break
+            inputs, targets = batch
+            moved_inputs = _move_inputs_to_device(inputs, device)
+            moved_targets = targets.to(device)
+            model.zero_grad(set_to_none=True)
+            if isinstance(moved_inputs, tuple):
+                outputs = model(*moved_inputs)
+            else:
+                outputs = model(moved_inputs)
+            loss = criterion(outputs, moved_targets)
+            loss.backward()
+
+            for info in module_infos:
+                stats = covariance_stats.get(info.name)
+                basis_pair = bases.get(info.name)
+                if stats is None or basis_pair is None:
+                    continue
+                module_id = id(info.module)
+                batch_inputs = collector._inputs.get(module_id)
+                batch_grad_outputs = collector._grad_outputs.get(module_id)
+                if batch_inputs is None or batch_grad_outputs is None:
+                    continue
+                activation_basis, gradient_basis = basis_pair
+                corrected_diagonal, num_samples = _compute_corrected_diagonal_with_count(
+                    info,
+                    batch_inputs,
+                    batch_grad_outputs,
+                    activation_basis,
+                    gradient_basis,
+                )
+                if info.name not in accumulated_diagonal:
+                    accumulated_diagonal[info.name] = corrected_diagonal * num_samples
+                    accumulated_samples[info.name] = num_samples
+                    continue
+                accumulated_diagonal[info.name] += corrected_diagonal * num_samples
+                accumulated_samples[info.name] += num_samples
+    finally:
+        model.zero_grad(set_to_none=True)
+        collector.remove_hooks()
+        model.train(was_training)
+
+    output: dict[str, EKFACFactorStats] = {}
+    for name, stats in covariance_stats.items():
+        if name not in accumulated_diagonal:
+            continue
+        corrected_diagonal = accumulated_diagonal[name] / max(accumulated_samples[name], 1)
+        output[name] = EKFACFactorStats(
+            info=stats.info,
+            activation_cov=stats.activation_cov,
+            gradient_cov=stats.gradient_cov,
+            num_samples=stats.num_samples,
+            corrected_diagonal=corrected_diagonal,
+        )
+    return output
 
 
 class KFACFactorCollector:
@@ -437,20 +543,20 @@ class KFACFactorCollector:
                 if name not in accumulated:
                     accumulated[name] = KFACFactorStats(
                         info=stats.info,
-                        activation_cov=stats.activation_cov.clone(),
-                        gradient_cov=stats.gradient_cov.clone(),
+                        activation_cov=stats.activation_cov.clone() * stats.num_samples,
+                        gradient_cov=stats.gradient_cov.clone() * stats.num_samples,
                         num_samples=stats.num_samples,
                     )
                     continue
 
-                accumulated[name].activation_cov += stats.activation_cov
-                accumulated[name].gradient_cov += stats.gradient_cov
+                accumulated[name].activation_cov += stats.activation_cov * stats.num_samples
+                accumulated[name].gradient_cov += stats.gradient_cov * stats.num_samples
                 accumulated[name].num_samples += stats.num_samples
 
         if num_batches > 0:
             for stats in accumulated.values():
-                stats.activation_cov /= num_batches
-                stats.gradient_cov /= num_batches
+                stats.activation_cov /= max(stats.num_samples, 1)
+                stats.gradient_cov /= max(stats.num_samples, 1)
         return accumulated
 
 
@@ -478,12 +584,19 @@ def kfac_update(
     model = model.to(device)
 
     collector = KFACFactorCollector(model)
-    factor_stats = collector.accumulate_batch(
-        criterion=criterion,
-        inputs=retained_inputs,
-        targets=retained_targets,
-        device=device,
-    )
+    if isinstance(retained_inputs, DataLoader):
+        factor_stats = collector.accumulate_loader(
+            dataloader=retained_inputs,
+            criterion=criterion,
+            device=device,
+        )
+    else:
+        factor_stats = collector.accumulate_batch(
+            criterion=criterion,
+            inputs=retained_inputs,
+            targets=retained_targets,
+            device=device,
+        )
 
     moved_target_inputs = _move_inputs_to_device(target_inputs, device)
     moved_target_targets = target_targets.to(device)
@@ -518,6 +631,7 @@ def kfac_update(
             details[info.name] = {
                 "activation_shape": list(stats.activation_cov.shape),
                 "gradient_shape": list(stats.gradient_cov.shape),
+                "num_samples": stats.num_samples,
                 "role": info.role,
                 "num_heads": -1 if info.num_heads is None else info.num_heads,
             }
@@ -589,14 +703,23 @@ def ekfac_update(
     model = model.to(device)
 
     module_infos = _iter_supported_modules(model)
-    factor_stats = _collect_ekfac_batch_stats(
-        model=model,
-        module_infos=module_infos,
-        criterion=criterion,
-        inputs=retained_inputs,
-        targets=retained_targets,
-        device=device,
-    )
+    if isinstance(retained_inputs, DataLoader):
+        factor_stats = _collect_ekfac_loader_stats(
+            model=model,
+            module_infos=module_infos,
+            criterion=criterion,
+            dataloader=retained_inputs,
+            device=device,
+        )
+    else:
+        factor_stats = _collect_ekfac_batch_stats(
+            model=model,
+            module_infos=module_infos,
+            criterion=criterion,
+            inputs=retained_inputs,
+            targets=retained_targets,
+            device=device,
+        )
 
     moved_target_inputs = _move_inputs_to_device(target_inputs, device)
     moved_target_targets = target_targets.to(device)
@@ -631,6 +754,7 @@ def ekfac_update(
                 "activation_shape": list(stats.activation_cov.shape),
                 "gradient_shape": list(stats.gradient_cov.shape),
                 "corrected_diagonal_shape": list(stats.corrected_diagonal.shape),
+                "num_samples": stats.num_samples,
                 "role": info.role,
                 "num_heads": -1 if info.num_heads is None else info.num_heads,
             }
