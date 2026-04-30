@@ -130,8 +130,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
-    parser.add_argument("--edit-scale", type=float, default=0.02)
-    parser.add_argument("--max-update-steps", type=int, default=200)
+    parser.add_argument("--edit-scale", type=float, default=0.03)
+    parser.add_argument("--max-update-steps", type=int, default=100)
     parser.add_argument("--target-self-acc", type=float, default=0.1)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument(
