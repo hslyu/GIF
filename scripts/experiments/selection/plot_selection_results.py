@@ -18,10 +18,48 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import colors as mcolors
+from matplotlib import font_manager as fm
 from matplotlib.lines import Line2D
 from matplotlib.patches import ConnectionPatch, Rectangle
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy.interpolate import PchipInterpolator
+
+PRETENDARD_FONT_DIR = Path("/fast/hslyu/font")
+PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
+PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
+PRETENDARD_SEMIBOLD_PATH = PRETENDARD_FONT_DIR / "Pretendard-SemiBold.ttf"
+
+for font_path in (
+    PRETENDARD_REGULAR_PATH,
+    PRETENDARD_MEDIUM_PATH,
+    PRETENDARD_SEMIBOLD_PATH,
+):
+    if font_path.exists():
+        fm.fontManager.addfont(str(font_path))
+
+
+def pretendard_regular(size: float) -> fm.FontProperties:
+    if PRETENDARD_REGULAR_PATH.exists():
+        return fm.FontProperties(fname=str(PRETENDARD_REGULAR_PATH), size=size)
+    return fm.FontProperties(size=size)
+
+
+def pretendard_medium(size: float) -> fm.FontProperties:
+    if PRETENDARD_MEDIUM_PATH.exists():
+        return fm.FontProperties(fname=str(PRETENDARD_MEDIUM_PATH), size=size)
+    return fm.FontProperties(size=size, weight="medium")
+
+
+def pretendard_semibold(size: float) -> fm.FontProperties:
+    if PRETENDARD_SEMIBOLD_PATH.exists():
+        return fm.FontProperties(fname=str(PRETENDARD_SEMIBOLD_PATH), size=size)
+    return fm.FontProperties(size=size, weight="semibold")
+
+
+def apply_tick_font(ax, size: float) -> None:
+    for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
+        tick_label.set_fontproperties(pretendard_regular(size))
+
 
 SELECTOR_ORDER = [
     "random",
@@ -46,11 +84,11 @@ RETRAINED_LEGEND_LABEL = "From-scratch retrain"
 
 SELECTOR_LABELS = {
     "caps": "CAPS",
-    "reverse_caps": "Reverse caps",
-    "highest_k_outputs": "Highest outputs",
-    "highest_k_gradients": "Highest gradients",
-    "lowest_k_outputs": "Lowest outputs",
-    "lowest_k_gradients": "Lowest gradients",
+    "reverse_caps": "Reverse CAPS",
+    "highest_k_outputs": r"Top-$\rho\%$ outputs",
+    "highest_k_gradients": r"Top-$\rho\%$ gradients",
+    "lowest_k_outputs": r"Bottom-$\rho\%$ outputs",
+    "lowest_k_gradients": r"Bottom-$\rho\%$ gradients",
     "random": "Random",
 }
 
@@ -483,13 +521,14 @@ def draw_dataset_axis(
         ax.axhline(retrained_baseline, label="_nolegend_", **RETRAINED_LINE_KW)
 
     ax.set_xticks(MAIN_XTICKS)
-    ax.set_xticklabels(MAIN_XTICK_LABELS, fontsize=8)
+    ax.set_xticklabels(MAIN_XTICK_LABELS, fontproperties=pretendard_regular(10))
     ax.set_xlim(*MAIN_XLIM)
     if dataset in DATASET_YLIMS:
         ax.set_ylim(*DATASET_YLIMS[dataset])
     if dataset in DATASET_YTICKS:
         ax.set_yticks(DATASET_YTICKS[dataset])
-    ax.tick_params(axis="y", labelsize=8)
+    ax.tick_params(axis="y", labelsize=10)
+    apply_tick_font(ax, 10)
     draw_background_grid(ax)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -620,8 +659,9 @@ def draw_dataset_axis(
                 )
             )
         zoom_ax.set_xticks([0.05, 0.1, 0.2])
-        zoom_ax.set_xticklabels(["5", "10", "20"])
-        zoom_ax.tick_params(labelsize=7, pad=1)
+        zoom_ax.set_xticklabels(["5", "10", "20"], fontproperties=pretendard_regular(10))
+        zoom_ax.tick_params(labelsize=10, pad=1)
+        apply_tick_font(zoom_ax, 10)
         draw_background_grid(zoom_ax)
         if box_ymax is not None:
             for parent_xy, inset_xy in [
@@ -708,16 +748,17 @@ def plot_combined_grid(
             if dataset == "cifar10_resnet18"
             else None,
         )
-        ax.set_xlabel("Parameter ratio (%)", fontsize=9)
-        ax.set_ylabel("Retain (%)", fontsize=9)
+        ax.set_xlabel("Parameter ratio (%)", fontproperties=pretendard_medium(10))
+        ax.set_ylabel("Retain accuracy (%)", fontproperties=pretendard_medium(10))
+        ax.yaxis.set_label_coords(-0.09, 0.5)
         ax.text(
             0.5,
-            -0.23,
+            -0.25,
             dataset_caption(dataset, next(panel_labels)),
             transform=ax.transAxes,
             ha="center",
             va="top",
-            fontsize=12,
+            fontproperties=pretendard_semibold(14),
             clip_on=False,
         )
         if legend_handles is None:
@@ -733,47 +774,59 @@ def plot_combined_grid(
         label_to_handle = dict(zip(legend_labels, legend_handles))
         ordered_handles: list = []
         ordered_labels: list[str] = []
-        retrained_inserted = False
+        retrained_handle = Line2D(
+            [0],
+            [0],
+            label=RETRAINED_LEGEND_LABEL,
+            **RETRAINED_LINE_KW,
+        )
+        random_handle = None
+        random_label = SELECTOR_LABELS.get("random", "random")
+        ordered_handles.append(retrained_handle)
+        ordered_labels.append(RETRAINED_LEGEND_LABEL)
         for selector in LEGEND_ORDER:
             label = SELECTOR_LABELS.get(selector, selector)
             handle = label_to_handle.get(label)
             if handle is None:
                 continue
+            if selector == "random":
+                random_handle = handle
+                continue
             ordered_handles.append(handle)
             ordered_labels.append(label)
             if selector == "highest_k_outputs":
-                ordered_handles.append(
-                    Line2D(
-                        [0],
-                        [0],
-                        label=RETRAINED_LEGEND_LABEL,
-                        **RETRAINED_LINE_KW,
-                    )
-                )
-                ordered_labels.append(RETRAINED_LEGEND_LABEL)
-                retrained_inserted = True
-
-        if not retrained_inserted:
-            ordered_handles.append(
-                Line2D([0], [0], label=RETRAINED_LEGEND_LABEL, **RETRAINED_LINE_KW)
-            )
-            ordered_labels.append(RETRAINED_LEGEND_LABEL)
+                if random_handle is not None:
+                    ordered_handles.append(random_handle)
+                    ordered_labels.append(random_label)
 
         ordered_handles = ordered_handles[:]
         ordered_labels = ordered_labels[:]
-        legend_ax.legend(
+        legend = legend_ax.legend(
             ordered_handles,
             ordered_labels,
             loc="center",
-            frameon=False,
-            fontsize=11,
-            ncol=2,
+            bbox_to_anchor=(0.5, 0.37),
+            frameon=True,
+            fancybox=True,
+            facecolor="none",
+            edgecolor="#383838",
+            framealpha=1.0,
+            prop=pretendard_regular(12),
+            ncol=1,
             handlelength=2.4,
             labelspacing=1.0,
+            borderpad=0.6,
         )
+        legend.get_frame().set_linewidth(0.8)
 
-    out_path = out_dir / f"selection_schemes_{metric}.pdf"
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    out_path = out_dir / "selection_scheme.pdf"
+    fig.savefig(
+        out_path,
+        dpi=300,
+        bbox_inches="tight",
+        pad_inches=0,
+        transparent=True,
+    )
     plt.close(fig)
     return out_path
 
@@ -787,7 +840,11 @@ def main() -> None:
         default=Path("../unlearn/results"),
         help="Directory containing JSON files with retrained_baseline metrics.",
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("results/plots"))
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("/home/hslyu/research/rework/GIF_latex/Figures"),
+    )
     parser.add_argument("--metric", default="retain_acc")
     parser.add_argument(
         "--include-small-runs",

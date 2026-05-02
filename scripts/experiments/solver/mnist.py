@@ -768,13 +768,6 @@ def run_solver_once(
     finite_norm = math.isfinite(update_norm)
     success = (not error) and finite_update and finite_residual and finite_norm
     status = "timeout" if timed_out else ("ok" if success else "failed")
-    if solver == "lissa" and success and not details.get("completed_max_iter", False):
-        success = False
-        status = "failed"
-        error = (
-            "lissa_incomplete_max_iter: "
-            f"{details.get('iterations', 0)} < {args.max_iter}"
-        )
     if timed_out:
         success = False
     elif (

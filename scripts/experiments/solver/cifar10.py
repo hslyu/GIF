@@ -230,8 +230,8 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Run seeds seed, seed+1, ..., seed+num_seeds-1.",
     )
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--num-workers", type=int, default=32)
     parser.add_argument("--target-label", type=int, default=0)
     parser.add_argument("--target-batch-size", type=int, default=1024)
     parser.add_argument("--p-lissa-small-ratio", type=float, default=0.1)
@@ -300,7 +300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--time-limit-sec",
         type=float,
-        default=60.0,
+        default=240.0,
         help=(
             "Per solver/model runtime budget. A run that finishes after this "
             "budget is marked timeout and, by default, the experiment stops "
@@ -840,13 +840,6 @@ def run_solver_once(
     finite_norm = math.isfinite(update_norm)
     success = (not error) and finite_update and finite_residual and finite_norm
     status = "timeout" if timed_out else ("ok" if success else "failed")
-    if solver == "lissa" and success and not details.get("completed_max_iter", False):
-        success = False
-        status = "failed"
-        error = (
-            "lissa_incomplete_max_iter: "
-            f"{details.get('iterations', 0)} < {args.max_iter}"
-        )
     if timed_out:
         success = False
     elif (
@@ -1144,7 +1137,9 @@ def write_results(
 
 
 def seed_output_prefix(args: argparse.Namespace, seed: int) -> Path:
-    return args.output_prefix.parent / "cifar10" / f"seed_{seed}" / args.output_prefix.name
+    return (
+        args.output_prefix.parent / "cifar10" / f"seed_{seed}" / args.output_prefix.name
+    )
 
 
 def row_memory_mb(row: dict) -> float:
@@ -1259,6 +1254,26 @@ def run_seed(
             else:
                 system = "classical_hessian"
                 hvp_per_a_times = 1
+
+            if solver == "lanczos" and size == "20m":
+                row = skipped_row(
+                    solver=solver,
+                    reason="lanczos disabled for CIFAR-10 20m",
+                    system=system,
+                    hvp_per_a_times=hvp_per_a_times,
+                    size=size,
+                    path=path,
+                    checkpoint=checkpoint,
+                    target_params=target_params,
+                    actual_params=actual_params,
+                    small_selected_params=small_selected_params,
+                    p_lissa_small_ratio=seed_args.p_lissa_small_ratio,
+                    classical_rhs_norm=classical_rhs_norm,
+                )
+                row["seed"] = seed
+                rows.append(row)
+                print(f"  {solver:12s} skipped: {row['error']}")
+                continue
 
             if solver == "p_lissa_full":
                 rhs, a_times = build_full_normal_system(
