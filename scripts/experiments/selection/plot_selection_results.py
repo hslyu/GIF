@@ -29,6 +29,12 @@ PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
 PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
 PRETENDARD_SEMIBOLD_PATH = PRETENDARD_FONT_DIR / "Pretendard-SemiBold.ttf"
 
+TICK_FONTSIZE = 10
+AXIS_LABEL_FONTSIZE = 10
+PANEL_LABEL_FONTSIZE = 14
+LEGEND_FONTSIZE = 10
+ANNOTATION_FONTSIZE = 11
+
 for font_path in (
     PRETENDARD_REGULAR_PATH,
     PRETENDARD_MEDIUM_PATH,
@@ -56,7 +62,7 @@ def pretendard_semibold(size: float) -> fm.FontProperties:
     return fm.FontProperties(size=size, weight="semibold")
 
 
-def apply_tick_font(ax, size: float) -> None:
+def apply_tick_font(ax, size: float = TICK_FONTSIZE) -> None:
     for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
         tick_label.set_fontproperties(pretendard_regular(size))
 
@@ -521,17 +527,47 @@ def draw_dataset_axis(
         ax.axhline(retrained_baseline, label="_nolegend_", **RETRAINED_LINE_KW)
 
     ax.set_xticks(MAIN_XTICKS)
-    ax.set_xticklabels(MAIN_XTICK_LABELS, fontproperties=pretendard_regular(10))
+    ax.set_xticklabels(
+        MAIN_XTICK_LABELS, fontproperties=pretendard_regular(TICK_FONTSIZE)
+    )
     ax.set_xlim(*MAIN_XLIM)
     if dataset in DATASET_YLIMS:
         ax.set_ylim(*DATASET_YLIMS[dataset])
     if dataset in DATASET_YTICKS:
         ax.set_yticks(DATASET_YTICKS[dataset])
-    ax.tick_params(axis="y", labelsize=10)
-    apply_tick_font(ax, 10)
+    ax.tick_params(axis="y", labelsize=TICK_FONTSIZE)
+    apply_tick_font(ax)
     draw_background_grid(ax)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+
+    if dataset == "svhn_vgg11":
+        original_point = summary.get(("random", 1.0))
+        if original_point is not None and should_plot_summary_point(
+            dataset, "random", 1.0, original_point
+        ):
+            ax.annotate(
+                "Performance of\nthe original IFs",
+                xy=(0.99, original_point["reached_mean"] - 1.2),
+                xycoords="data",
+                xytext=(-45, -55),
+                textcoords="offset points",
+                ha="center",
+                va="top",
+                multialignment="center",
+                fontproperties=pretendard_semibold(ANNOTATION_FONTSIZE),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    mutation_scale=18,
+                    color="0.25",
+                    linewidth=1.6,
+                    zorder=1000,
+                    shrinkA=0,
+                    shrinkB=0,
+                ),
+                zorder=1001,
+                clip_on=False,
+            )
 
     if zoom_xlim is not None:
         zoom_xmin, zoom_xmax = zoom_xlim
@@ -659,9 +695,11 @@ def draw_dataset_axis(
                 )
             )
         zoom_ax.set_xticks([0.05, 0.1, 0.2])
-        zoom_ax.set_xticklabels(["5", "10", "20"], fontproperties=pretendard_regular(10))
-        zoom_ax.tick_params(labelsize=10, pad=1)
-        apply_tick_font(zoom_ax, 10)
+        zoom_ax.set_xticklabels(
+            ["5", "10", "20"], fontproperties=pretendard_regular(TICK_FONTSIZE)
+        )
+        zoom_ax.tick_params(labelsize=TICK_FONTSIZE, pad=1)
+        apply_tick_font(zoom_ax)
         draw_background_grid(zoom_ax)
         if box_ymax is not None:
             for parent_xy, inset_xy in [
@@ -748,8 +786,12 @@ def plot_combined_grid(
             if dataset == "cifar10_resnet18"
             else None,
         )
-        ax.set_xlabel("Parameter ratio (%)", fontproperties=pretendard_medium(10))
-        ax.set_ylabel("Retain accuracy (%)", fontproperties=pretendard_medium(10))
+        ax.set_xlabel(
+            "Parameter ratio (%)", fontproperties=pretendard_medium(AXIS_LABEL_FONTSIZE)
+        )
+        ax.set_ylabel(
+            "Retain accuracy (%)", fontproperties=pretendard_medium(AXIS_LABEL_FONTSIZE)
+        )
         ax.yaxis.set_label_coords(-0.09, 0.5)
         ax.text(
             0.5,
@@ -758,7 +800,7 @@ def plot_combined_grid(
             transform=ax.transAxes,
             ha="center",
             va="top",
-            fontproperties=pretendard_semibold(14),
+            fontproperties=pretendard_semibold(PANEL_LABEL_FONTSIZE),
             clip_on=False,
         )
         if legend_handles is None:
@@ -805,13 +847,13 @@ def plot_combined_grid(
             ordered_handles,
             ordered_labels,
             loc="center",
-            bbox_to_anchor=(0.5, 0.37),
+            bbox_to_anchor=(0.5, 0.45),
             frameon=True,
             fancybox=True,
             facecolor="none",
             edgecolor="#383838",
             framealpha=1.0,
-            prop=pretendard_regular(12),
+            prop=pretendard_medium(LEGEND_FONTSIZE),
             ncol=1,
             handlelength=2.4,
             labelspacing=1.0,
