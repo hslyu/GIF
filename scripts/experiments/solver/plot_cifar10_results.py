@@ -8,6 +8,7 @@ import colorsys
 import csv
 import json
 import math
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -17,25 +18,35 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
+from matplotlib import font_manager as fm  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import ConnectionPatch, Rectangle  # noqa: E402
+from matplotlib.ticker import (  # noqa: E402
+    FixedFormatter,
+    FixedLocator,
+    NullFormatter,
+    NullLocator,
+)
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes  # noqa: E402
 from scipy.interpolate import PchipInterpolator  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RESULTS = (
-    PROJECT_ROOT
-    / "scripts"
-    / "experiments"
-    / "solver"
-    / "results"
-    / "cifar10_solver_accuracy_scaling.csv"
+PRETENDARD_FONT_DIR = Path("/fast/hslyu/font")
+PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
+PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
+
+TICK_FONTSIZE = 10
+AXIS_LABEL_FONTSIZE = 10
+LEGEND_FONTSIZE = 10
+PLOT_FIGSIZE = (18.0, 3)
+PLOT_WSPACE = 0.35
+PLOT_WIDTH_RATIOS = [1.0, 1.0, 1.0, 0.3]
+
+DEFAULT_SEED_RESULTS = (
+    PROJECT_ROOT / "scripts" / "experiments" / "solver" / "results" / "cifar10"
 )
 DEFAULT_OUT = (
-    PROJECT_ROOT
-    / "scripts"
-    / "experiments"
-    / "solver"
-    / "results"
-    / "cifar10_solver_accuracy_scaling_metrics.pdf"
+    Path("/home/hslyu/research/rework/GIF_latex/Figures") / "solver_cifar10.pdf"
 )
 
 SIZE_ORDER = ["25k", "100k", "500k", "2m", "5m", "10m", "20m"]
@@ -50,12 +61,12 @@ SOLVER_ORDER = [
     "ekfac",
 ]
 SOLVER_LABELS = {
-    "p_lissa_full": "p-LiSSA full",
-    "p_lissa_0p1": "p-LiSSA 0.1",
+    "p_lissa_full": "P-LiSSA",
+    "p_lissa_0p1": "P-LiSSA with 10% param",
     "lissa": "LiSSA",
-    "cg": "CG",
-    "schulz": "Schulz",
-    "lanczos": "Lanczos",
+    "cg": "Conjugate gradient",
+    "schulz": "Schulz iteration",
+    "lanczos": "Lanczos iteration",
     "kfac": "KFAC",
     "ekfac": "EKFAC",
 }
@@ -81,11 +92,34 @@ MARKERS = {
 }
 GRID_KW = {"linestyle": (0, (5, 5)), "linewidth": 0.5, "color": "#e0e0e0"}
 PCHIP_SAMPLES_PER_INTERVAL = 24
+MEMORY_ZOOM_SIZE_LABEL = "500k"
+MEMORY_ZOOM_X_FACTOR = 1.55
 METRICS = [
-    ("residual_pct", "Residual (%)", True),
+    ("residual", "Regularized residual", True),
     ("memory_mb", "Memory (MB)", True),
     ("elapsed_s", "Elapsed time (s)", False),
 ]
+
+for font_path in (PRETENDARD_REGULAR_PATH, PRETENDARD_MEDIUM_PATH):
+    if font_path.exists():
+        fm.fontManager.addfont(str(font_path))
+
+
+def pretendard_regular(size: float) -> fm.FontProperties:
+    if PRETENDARD_REGULAR_PATH.exists():
+        return fm.FontProperties(fname=str(PRETENDARD_REGULAR_PATH), size=size)
+    return fm.FontProperties(size=size)
+
+
+def pretendard_medium(size: float) -> fm.FontProperties:
+    if PRETENDARD_MEDIUM_PATH.exists():
+        return fm.FontProperties(fname=str(PRETENDARD_MEDIUM_PATH), size=size)
+    return fm.FontProperties(size=size, weight="medium")
+
+
+def apply_tick_font(ax, size: float = TICK_FONTSIZE) -> None:
+    for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
+        tick_label.set_fontproperties(pretendard_regular(size))
 
 
 def parse_args() -> argparse.Namespace:
@@ -99,8 +133,11 @@ def parse_args() -> argparse.Namespace:
         "results",
         nargs="?",
         type=Path,
-        default=DEFAULT_RESULTS,
-        help="CSV or JSON results file written by scripts/experiments/solver/cifar10.py.",
+        default=DEFAULT_SEED_RESULTS,
+        help=(
+            "Seed results directory containing per-seed JSON files, or an explicit "
+            "CSV/JSON results file written by scripts/experiments/solver/cifar10.py."
+        ),
     )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument(
@@ -120,13 +157,41 @@ def as_float(value: Any) -> float:
         return math.nan
 
 
-def load_rows(path: Path) -> list[dict[str, Any]]:
+def load_result_file(path: Path) -> list[dict[str, Any]]:
     if path.suffix == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
         return list(payload.get("results", []))
 
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
+
+
+def result_row_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("seed", "")),
+        str(row.get("size", "")),
+        str(row.get("solver", "")),
+    )
+
+
+def load_seed_rows(path: Path) -> list[dict[str, Any]]:
+    files: list[Path] = []
+    for seed_dir in sorted(path.glob("seed_*")):
+        if not seed_dir.is_dir():
+            continue
+        files.extend(sorted(seed_dir.glob("*.json")))
+
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for result_file in files:
+        for row in load_result_file(result_file):
+            merged[result_row_key(row)] = row
+    return list(merged.values())
+
+
+def load_rows(path: Path) -> list[dict[str, Any]]:
+    if path.is_dir():
+        return load_seed_rows(path)
+    return load_result_file(path)
 
 
 def marker_face_color(color: str) -> tuple[float, float, float]:
@@ -167,7 +232,7 @@ def enrich_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     enriched = []
     for row in rows:
         item = dict(row)
-        item["residual_pct"] = as_float(row.get("eval_residual")) * 100.0
+        item["residual"] = as_float(row.get("eval_residual"))
         item["memory_mb"] = row_memory_mb(row)
         item["elapsed_s"] = as_float(row.get("time_sec"))
         item["actual_params"] = as_float(row.get("actual_params"))
@@ -182,6 +247,26 @@ def ordered_sizes(rows: list[dict[str, Any]]) -> list[str]:
     return sizes
 
 
+def ordered_param_counts(
+    rows: list[dict[str, Any]], sizes: list[str]
+) -> dict[str, float]:
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        size = str(row.get("size", ""))
+        if size not in sizes:
+            continue
+        value = as_float(row.get("actual_params"))
+        if math.isfinite(value):
+            grouped[size].append(value)
+
+    params: dict[str, float] = {}
+    for size in sizes:
+        values = np.asarray(grouped.get(size, []), dtype=float)
+        if len(values):
+            params[size] = float(np.median(values))
+    return params
+
+
 def ordered_solvers(rows: list[dict[str, Any]]) -> list[str]:
     present = {str(row.get("solver", "")) for row in rows}
     solvers = [solver for solver in SOLVER_ORDER if solver in present]
@@ -190,29 +275,71 @@ def ordered_solvers(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def build_series(
-    rows: list[dict[str, Any]], sizes: list[str], solver: str, metric: str
+    rows: list[dict[str, Any]],
+    sizes: list[str],
+    size_params: dict[str, float],
+    solver: str,
+    metric: str,
+    *,
+    log_y: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     by_size: dict[str, list[float]] = {size: [] for size in sizes}
     for row in rows:
         if row.get("solver") != solver:
             continue
-        if row.get("status") != "ok":
-            continue
         size = str(row.get("size", ""))
-        if size not in by_size:
+        if size not in by_size or size not in size_params:
             continue
         value = as_float(row.get(metric))
-        if math.isfinite(value):
+        if math.isfinite(value) and (not log_y or value > 0.0):
+            if log_y:
+                value = math.log10(value)
             by_size[size].append(value)
 
-    xs = np.arange(len(sizes), dtype=float)
+    xs = np.asarray([size_params[size] for size in sizes if size in size_params], dtype=float)
     ys = []
     spread = []
     for size in sizes:
+        if size not in size_params:
+            continue
         values = np.asarray(by_size[size], dtype=float)
         ys.append(float(values.mean()) if len(values) else math.nan)
         spread.append(float(values.std(ddof=1)) if len(values) > 1 else 0.0)
     return xs, np.asarray(ys, dtype=float), np.asarray(spread, dtype=float)
+
+
+def elapsed_time_limits(rows: list[dict[str, Any]]) -> tuple[float, float]:
+    values = []
+    for row in rows:
+        value = as_float(row.get("time_sec"))
+        if math.isfinite(value) and value > 0.0:
+            values.append(value)
+
+    if not values:
+        return 0.5, 1.0
+
+    min_value = min(values)
+    max_value = max(values)
+    lower = max(min_value * 0.9, 0.1)
+    upper = max_value * 1.05
+    if math.isclose(lower, upper):
+        upper = lower * 1.25
+    return lower, upper
+
+
+def format_param_count(value: float) -> str:
+    if not math.isfinite(value) or value <= 0:
+        return ""
+
+    exponent = int(math.floor(math.log10(value)))
+    mantissa = value / (10**exponent)
+    if math.isclose(mantissa, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+        return rf"$10^{{{exponent}}}$"
+
+    rounded = int(round(mantissa))
+    if rounded >= 10:
+        return rf"$10^{{{exponent + 1}}}$"
+    return rf"${rounded}\!\cdot\!10^{{{exponent}}}$"
 
 
 def smooth_segments(
@@ -221,7 +348,7 @@ def smooth_segments(
     spread: np.ndarray,
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     segments = []
-    finite = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(spread)
+    finite = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(spread) & (xs > 0.0)
     start = None
     for idx, is_finite in enumerate(np.r_[finite, False]):
         if is_finite and start is None:
@@ -232,52 +359,224 @@ def smooth_segments(
             spread_seg = spread[start:idx]
             if len(x_seg) > 1:
                 sample_count = (len(x_seg) - 1) * PCHIP_SAMPLES_PER_INTERVAL + 1
-                x_smooth = np.linspace(x_seg[0], x_seg[-1], sample_count)
-                y_smooth = PchipInterpolator(x_seg, y_seg)(x_smooth)
-                spread_smooth = PchipInterpolator(x_seg, spread_seg)(x_smooth)
-                segments.append(
-                    (x_smooth, y_smooth, np.maximum(spread_smooth, 0.0))
-                )
+                x_seg_log = np.log10(x_seg)
+                x_smooth_log = np.linspace(x_seg_log[0], x_seg_log[-1], sample_count)
+                x_smooth = np.power(10.0, x_smooth_log)
+                y_smooth = PchipInterpolator(x_seg_log, y_seg)(x_smooth_log)
+                spread_smooth = PchipInterpolator(x_seg_log, spread_seg)(x_smooth_log)
+                segments.append((x_smooth, y_smooth, np.maximum(spread_smooth, 0.0)))
             else:
                 segments.append((x_seg, y_seg, np.maximum(spread_seg, 0.0)))
             start = None
     return segments
 
 
+def add_memory_zoom_inset(
+    ax,
+    plot_entries: list[dict[str, Any]],
+    *,
+    center_x: float,
+) -> None:
+    zoom_xmin = center_x / MEMORY_ZOOM_X_FACTOR
+    zoom_xmax = center_x * MEMORY_ZOOM_X_FACTOR
+    zoom_ax = inset_axes(
+        ax,
+        width="40%",
+        height="30%",
+        loc="upper left",
+        bbox_to_anchor=(0.08, -0.04, 1.0, 1.0),
+        bbox_transform=ax.transAxes,
+        borderpad=0.7,
+    )
+    zoom_ax.set_zorder(100)
+    zoom_ax.set_facecolor("white")
+    zoom_ax.add_patch(
+        Rectangle(
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            transform=zoom_ax.transAxes,
+            facecolor="white",
+            edgecolor="none",
+            zorder=-100,
+            clip_on=False,
+        )
+    )
+    zoom_y_values: list[float] = []
+
+    for entry in plot_entries:
+        if entry["solver"] == "lanczos":
+            continue
+        color = entry["color"]
+        marker = entry["marker"]
+        line_zorder = entry["line_zorder"]
+        for x_smooth, y_smooth, _spread_smooth in entry["segments"]:
+            mask = (zoom_xmin <= x_smooth) & (x_smooth <= zoom_xmax)
+            if not np.any(mask):
+                continue
+            y_zoom = y_smooth[mask]
+            zoom_ax.plot(
+                x_smooth[mask],
+                y_zoom,
+                linewidth=1.8,
+                color=color,
+                zorder=line_zorder,
+            )
+            zoom_y_values.extend(y_zoom[np.isfinite(y_zoom) & (y_zoom > 0.0)].tolist())
+
+        marker_xs = entry["marker_xs"]
+        marker_ys = entry["marker_ys"]
+        marker_mask = (zoom_xmin <= marker_xs) & (marker_xs <= zoom_xmax)
+        if np.any(marker_mask):
+            marker_y_zoom = marker_ys[marker_mask]
+            zoom_ax.plot(
+                marker_xs[marker_mask],
+                marker_y_zoom,
+                linestyle="None",
+                marker=marker,
+                markersize=6.2,
+                color=color,
+                markerfacecolor=marker_face_color(color),
+                markeredgecolor=marker_edge_color(color),
+                markeredgewidth=1.0,
+                zorder=line_zorder + 1,
+            )
+            zoom_y_values.extend(
+                marker_y_zoom[
+                    np.isfinite(marker_y_zoom) & (marker_y_zoom > 0.0)
+                ].tolist()
+            )
+
+    if not zoom_y_values:
+        zoom_ax.remove()
+        return
+
+    y_min = min(zoom_y_values)
+    y_max = max(zoom_y_values)
+    if math.isclose(y_min, y_max):
+        y_min *= 0.9
+        y_max *= 1.1
+
+    log_min = math.log10(y_min)
+    log_max = math.log10(y_max)
+    pad = max((log_max - log_min) * 0.18, 0.05)
+    zoom_ymin = max(10 ** (log_min - pad), np.finfo(float).tiny)
+    zoom_ymax = max(10 ** (log_max + pad), 3000.0 * 1.05)
+    zoom_yticks = np.asarray([1000.0, 1500.0, 3000.0], dtype=float)
+
+    zoom_ax.set_xscale("log")
+    zoom_ax.set_yscale("log")
+    zoom_ax.set_xlim(zoom_xmin, zoom_xmax)
+    zoom_ax.set_ylim(zoom_ymin, zoom_ymax)
+    zoom_ax.xaxis.set_major_locator(FixedLocator([center_x]))
+    zoom_ax.xaxis.set_major_formatter(FixedFormatter([format_param_count(center_x)]))
+    zoom_ax.xaxis.set_minor_locator(NullLocator())
+    zoom_ax.xaxis.set_minor_formatter(NullFormatter())
+    zoom_ax.yaxis.set_major_locator(FixedLocator(zoom_yticks))
+    zoom_ax.yaxis.set_major_formatter(
+        FixedFormatter([f"{tick:,.0f}" for tick in zoom_yticks])
+    )
+    zoom_ax.yaxis.set_minor_locator(NullLocator())
+    zoom_ax.yaxis.set_minor_formatter(NullFormatter())
+    zoom_ax.tick_params(
+        which="both",
+        labelsize=TICK_FONTSIZE - 2,
+        direction="out",
+        pad=1,
+    )
+    apply_tick_font(zoom_ax, TICK_FONTSIZE - 2)
+    draw_background_grid(zoom_ax)
+
+    ax.add_patch(
+        Rectangle(
+            (zoom_xmin, zoom_ymin),
+            zoom_xmax - zoom_xmin,
+            zoom_ymax - zoom_ymin,
+            fill=False,
+            edgecolor="0.25",
+            linewidth=1.0,
+            linestyle="--",
+            zorder=12,
+        )
+    )
+    ax.figure.add_artist(
+        ConnectionPatch(
+            xyA=(zoom_xmin, zoom_ymin),
+            coordsA=ax.transData,
+            axesA=ax,
+            xyB=(0.0, 0.0),
+            coordsB=zoom_ax.transAxes,
+            axesB=zoom_ax,
+            color="0.45",
+            linewidth=0.8,
+            clip_on=False,
+            zorder=11,
+        )
+    )
+    ax.figure.add_artist(
+        ConnectionPatch(
+            xyA=(zoom_xmax, zoom_ymax),
+            coordsA=ax.transData,
+            axesA=ax,
+            xyB=(1.0, 1.0),
+            coordsB=zoom_ax.transAxes,
+            axesB=zoom_ax,
+            color="0.45",
+            linewidth=0.8,
+            clip_on=False,
+            zorder=11,
+        )
+    )
+
+
 def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) -> Path:
     rows = enrich_rows(rows)
     sizes = ordered_sizes(rows)
+    size_params = ordered_param_counts(rows, sizes)
+    sizes = [size for size in sizes if size in size_params]
     solvers = ordered_solvers(rows)
     if not sizes or not solvers:
         raise SystemExit("No plottable CIFAR-10 solver rows found.")
+    elapsed_ymin, elapsed_ymax = elapsed_time_limits(rows)
 
     fig, axes = plt.subplots(
-        2,
-        2,
-        figsize=(12.0, 7.2),
-        gridspec_kw={"hspace": 0.45, "wspace": 0.28},
+        1,
+        4,
+        figsize=PLOT_FIGSIZE,
+        gridspec_kw={"wspace": PLOT_WSPACE, "width_ratios": PLOT_WIDTH_RATIOS},
     )
-    metric_axes = [axes[0, 0], axes[0, 1], axes[1, 0]]
-    legend_ax = axes[1, 1]
+    metric_axes = axes[:3]
+    legend_ax = axes[3]
     legend_ax.axis("off")
     handles = []
 
     for ax, (metric, ylabel, use_log_y) in zip(metric_axes, METRICS):
+        plot_entries: list[dict[str, Any]] = []
         for solver_index, solver in enumerate(solvers):
             if metric == "elapsed_s" and solver == "schulz":
                 continue
             color = COLORS.get(solver, "#444444")
             marker = MARKERS.get(solver, "o")
-            xs, ys, spread = build_series(rows, sizes, solver, metric)
+            xs, ys, spread = build_series(
+                rows, sizes, size_params, solver, metric, log_y=use_log_y
+            )
             finite = np.isfinite(ys)
             if not np.any(finite):
                 continue
             line_zorder = 50 + len(solvers) - solver_index
-            band_zorder = 10 - solver_index * 0.1
-            for x_smooth, y_smooth, spread_smooth in smooth_segments(xs, ys, spread):
+            segments = smooth_segments(xs, ys, spread)
+            for x_smooth, y_smooth, spread_smooth in segments:
+                if use_log_y:
+                    y_plot = np.power(10.0, y_smooth)
+                    lower = np.power(10.0, y_smooth - spread_smooth)
+                    upper = np.power(10.0, y_smooth + spread_smooth)
+                else:
+                    y_plot = y_smooth
+                    lower = y_smooth - spread_smooth
+                    upper = y_smooth + spread_smooth
                 ax.plot(
                     x_smooth,
-                    y_smooth,
+                    y_plot,
                     linewidth=2.0,
                     color=color,
                     zorder=line_zorder,
@@ -286,16 +585,16 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 if np.any(spread_smooth > 0.0):
                     ax.fill_between(
                         x_smooth,
-                        y_smooth - spread_smooth,
-                        y_smooth + spread_smooth,
+                        lower,
+                        upper,
                         color=color,
                         alpha=0.16,
                         linewidth=0,
-                        zorder=band_zorder,
+                        zorder=10 - solver_index * 0.1,
                     )
             ax.plot(
                 xs[finite],
-                ys[finite],
+                np.power(10.0, ys[finite]) if use_log_y else ys[finite],
                 linestyle="None",
                 marker=marker,
                 markersize=7.2,
@@ -306,15 +605,25 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 zorder=line_zorder + 1,
                 label="_nolegend_",
             )
-            if np.any(spread[finite] > 0.0):
-                ax.fill_between(
-                    xs[finite],
-                    ys[finite] - spread[finite],
-                    ys[finite] + spread[finite],
-                    color=color,
-                    alpha=0.08,
-                    linewidth=0,
-                    zorder=band_zorder,
+            if metric == "memory_mb":
+                zoom_segments = []
+                for x_smooth, y_smooth, spread_smooth in segments:
+                    if use_log_y:
+                        zoom_segments.append(
+                            (x_smooth, np.power(10.0, y_smooth), spread_smooth)
+                        )
+                    else:
+                        zoom_segments.append((x_smooth, y_smooth, spread_smooth))
+                plot_entries.append(
+                    {
+                        "segments": zoom_segments,
+                        "solver": solver,
+                        "marker_xs": xs[finite],
+                        "marker_ys": np.power(10.0, ys[finite]) if use_log_y else ys[finite],
+                        "color": color,
+                        "marker": marker,
+                        "line_zorder": line_zorder,
+                    }
                 )
             if metric == METRICS[0][0]:
                 handles.append(
@@ -332,17 +641,32 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                     )
                 )
 
-        ax.set_xticks(np.arange(len(sizes)))
-        ax.set_xticklabels(sizes, fontsize=8)
-        ax.set_xlabel("Model size", fontsize=9)
-        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_xscale("log")
+        xs = np.asarray([size_params[size] for size in sizes], dtype=float)
+        ax.set_xticks(xs)
+        ax.set_xticklabels([format_param_count(size_params[size]) for size in sizes])
+        apply_tick_font(ax)
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+            label.set_rotation_mode("anchor")
+            label.set_horizontalalignment("right")
+        ax.set_xlabel(
+            "Parameter count", fontproperties=pretendard_medium(AXIS_LABEL_FONTSIZE)
+        )
+        ax.set_ylabel(ylabel, fontproperties=pretendard_medium(AXIS_LABEL_FONTSIZE))
         if use_log_y:
             ax.set_yscale("log")
         if metric == "memory_mb":
             ax.set_ylim(1e2, 4e4)
+            if MEMORY_ZOOM_SIZE_LABEL in size_params:
+                add_memory_zoom_inset(
+                    ax,
+                    plot_entries,
+                    center_x=size_params[MEMORY_ZOOM_SIZE_LABEL],
+                )
         if metric == "elapsed_s":
-            ax.set_yscale("log")
-        ax.tick_params(axis="y", labelsize=8)
+            ax.set_ylim(elapsed_ymin, min(elapsed_ymax, 100.0))
+        ax.set_xlim(xs.min() * 0.85, xs.max() * 1.15)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.margins(x=0.04, y=0.12)
@@ -352,18 +676,36 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
         handles,
         [handle.get_label() for handle in handles],
         loc="center",
-        frameon=False,
-        fontsize=10,
-        ncol=2,
+        bbox_to_anchor=(0.5, 0.5),
+        frameon=True,
+        fancybox=True,
+        facecolor="none",
+        edgecolor="#383838",
+        framealpha=1.0,
+        prop=pretendard_medium(LEGEND_FONTSIZE),
+        ncol=1,
         handlelength=2.4,
         labelspacing=1.0,
+        borderpad=0.6,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    fig.savefig(
+        out_path,
+        dpi=300,
+        bbox_inches="tight",
+        pad_inches=0,
+        transparent=True,
+    )
     if write_png:
         png_path = out_path.with_suffix(".png")
-        fig.savefig(png_path, dpi=300, bbox_inches="tight")
+        fig.savefig(
+            png_path,
+            dpi=300,
+            bbox_inches="tight",
+            pad_inches=0,
+            transparent=True,
+        )
     plt.close(fig)
     return out_path
 

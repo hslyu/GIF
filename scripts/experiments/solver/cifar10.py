@@ -196,19 +196,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument(
-        "--output-prefix",
+        "--output-dir",
         type=Path,
-        default=PROJECT_ROOT
-        / "scripts"
-        / "experiments"
-        / "solver"
-        / "results"
-        / "cifar10_solver_accuracy_scaling",
+        default=PROJECT_ROOT / "scripts" / "experiments" / "solver" / "results",
+        help="Directory where aggregate and per-seed result files are written.",
     )
     parser.add_argument(
         "--sizes", nargs="+", default=CIFAR10_SIZES, choices=CIFAR10_SIZES
     )
     parser.add_argument("--solvers", nargs="+", default=SOLVERS, choices=SOLVERS)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run selected solvers even when matching result rows already exist.",
+    )
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -230,7 +231,7 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Run seeds seed, seed+1, ..., seed+num_seeds-1.",
     )
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=32)
     parser.add_argument("--target-label", type=int, default=0)
     parser.add_argument("--target-batch-size", type=int, default=1024)
@@ -246,6 +247,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lanczos-rank", type=int, default=256)
     parser.add_argument("--lanczos-max-iter", type=int, default=800)
     parser.add_argument(
+        "--hvp-num-batches",
+        type=int,
+        default=2,
+        help="Use this many DataLoader batches for the retained curvature HVP set.",
+    )
+    parser.add_argument(
         "--damping-candidates",
         type=parse_damping_candidates,
         default=parse_damping_candidates("0,1e-8,1e-7,1e-6,1e-5,1e-4,1e-3,1e-2,1e-1,1"),
@@ -254,7 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lissa-damping-candidates",
         type=parse_damping_candidates,
-        default=parse_damping_candidates("1e-5,1e-4,1e-3,1e-2,1e-1,1"),
+        default=parse_damping_candidates("1e-2,1e-1,1"),
     )
     parser.add_argument(
         "--cg-damping-candidates",
@@ -300,17 +307,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--time-limit-sec",
         type=float,
-        default=240.0,
+        default=600.0,
         help=(
             "Per solver/model runtime budget. A run that finishes after this "
-            "budget is marked timeout and, by default, the experiment stops "
-            "after writing partial results."
+            "budget is marked timeout and the experiment continues by default."
         ),
     )
     parser.add_argument(
         "--keep-running-after-timeout",
         action="store_true",
-        help="Continue after a solver exceeds the time budget.",
+        help="Deprecated; timeout runs continue by default.",
+    )
+    parser.add_argument(
+        "--stop-after-timeout",
+        action="store_true",
+        help="Stop the experiment after a solver exceeds the time budget.",
     )
     parser.add_argument(
         "--wait-for-idle-gpu",
@@ -391,7 +402,21 @@ def load_batches(args: argparse.Namespace, device: torch.device, dtype: torch.dt
         seed=args.seed,
     )
     train_loader = bundle.train_loader
-    curvature_inputs, curvature_targets = next(iter(train_loader))
+    curvature_inputs_list: list[torch.Tensor] = []
+    curvature_targets_list: list[torch.Tensor] = []
+    train_iter = iter(train_loader)
+    for _ in range(args.hvp_num_batches):
+        try:
+            batch_inputs, batch_targets = next(train_iter)
+        except StopIteration as exc:
+            raise RuntimeError(
+                f"Only found {len(curvature_targets_list)} curvature batches; "
+                f"requested {args.hvp_num_batches}."
+            ) from exc
+        curvature_inputs_list.append(batch_inputs)
+        curvature_targets_list.append(batch_targets)
+    curvature_inputs = torch.cat(curvature_inputs_list, dim=0)
+    curvature_targets = torch.cat(curvature_targets_list, dim=0)
 
     target_inputs_list: list[torch.Tensor] = []
     target_targets_list: list[torch.Tensor] = []
@@ -572,20 +597,57 @@ def relative_residual(
     return eval_residual, solver_residual
 
 
-def build_full_normal_system(
+def make_batched_hvp_fn(
     model: torch.nn.Module,
-    total_loss: torch.Tensor,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: torch.nn.Module,
+    device: torch.device,
+    num_batches: int,
+) -> TensorOperator:
+    if num_batches < 1:
+        raise ValueError("--hvp-num-batches must be at least 1")
+
+    input_chunks = torch.chunk(inputs, num_batches, dim=0)
+    target_chunks = torch.chunk(targets, num_batches, dim=0)
+    total_examples = int(targets.size(0))
+    if total_examples == 0:
+        raise RuntimeError("Cannot build batched HVP from an empty curvature batch.")
+
+    def hvp_fn(vector: torch.Tensor) -> torch.Tensor:
+        accumulated = None
+        for batch_inputs, batch_targets in zip(
+            input_chunks, target_chunks, strict=True
+        ):
+            batch_inputs = batch_inputs.to(device=device)
+            batch_targets = batch_targets.to(device=device)
+            batch_loss = criterion(model(batch_inputs), batch_targets)
+            batch_hvp = hvp(model, batch_loss, vector)
+            weight = batch_targets.size(0) / total_examples
+            if accumulated is None:
+                accumulated = batch_hvp * weight
+            else:
+                accumulated.add_(batch_hvp, alpha=weight)
+            del batch_loss, batch_hvp
+        if accumulated is None:
+            return torch.zeros_like(vector)
+        return accumulated
+
+    return hvp_fn
+
+
+def build_full_normal_system(
+    hvp_fn: TensorOperator,
     hg_full: torch.Tensor,
 ) -> tuple[torch.Tensor, TensorOperator]:
     def a_times(value: torch.Tensor) -> torch.Tensor:
-        return hvp(model, total_loss, hvp(model, total_loss, value))
+        return hvp_fn(hvp_fn(value))
 
     return hg_full, a_times
 
 
 def build_restricted_system_from_cached_hg(
-    model: torch.nn.Module,
-    total_loss: torch.Tensor,
+    hvp_fn: TensorOperator,
     g_full: torch.Tensor,
     hg_full: torch.Tensor,
     index_list: torch.Tensor,
@@ -598,7 +660,7 @@ def build_restricted_system_from_cached_hg(
         full_buffer.zero_()
         full_buffer.index_copy_(0, index_list, value)
         return project_subset(
-            hvp(model, total_loss, hvp(model, total_loss, full_buffer)),
+            hvp_fn(hvp_fn(full_buffer)),
             index_list,
         )
 
@@ -1035,25 +1097,90 @@ def checkpoint_path(args: argparse.Namespace, size: str) -> Path:
     return args.checkpoint_dir / f"cifar10_scaled_resnet18_{size}.pth"
 
 
+def result_row_key(row: dict) -> tuple[str, str, str]:
+    return (
+        str(row.get("seed", "")),
+        str(row.get("size", "")),
+        str(row.get("solver", "")),
+    )
+
+
+def output_prefix(args: argparse.Namespace) -> Path:
+    return args.output_dir / "cifar10_solver_accuracy_scaling"
+
+
+def seed_output_prefix(args: argparse.Namespace, seed: int) -> Path:
+    return (
+        args.output_dir / "cifar10" / f"seed_{seed}" / "cifar10_solver_accuracy_scaling"
+    )
+
+
+def load_existing_rows(path_prefix: Path) -> list[dict]:
+    json_path = path_prefix.with_suffix(".json")
+    csv_path = path_prefix.with_suffix(".csv")
+    if json_path.is_file():
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        return list(payload.get("results", []))
+    if csv_path.is_file():
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
+    return []
+
+
+def merge_rows(*row_groups: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str, str], dict] = {}
+    for group in row_groups:
+        for row in group:
+            merged[result_row_key(row)] = row
+    return list(merged.values())
+
+
+def row_sort_key(row: dict) -> tuple[int, int, int, str, str, str]:
+    try:
+        seed_index = int(str(row.get("seed", 0)))
+    except ValueError:
+        seed_index = 0
+    size_value = str(row.get("size", ""))
+    solver_value = str(row.get("solver", ""))
+    try:
+        size_index = CIFAR10_SIZES.index(size_value)
+    except ValueError:
+        size_index = len(CIFAR10_SIZES)
+    try:
+        solver_index = SOLVERS.index(solver_value)
+    except ValueError:
+        solver_index = len(SOLVERS)
+    return (
+        seed_index,
+        size_index,
+        solver_index,
+        size_value,
+        solver_value,
+        str(row.get("status", "")),
+    )
+
+
 def write_results(
     args: argparse.Namespace,
     device: torch.device,
     rows: list[dict],
     *,
-    output_prefix: Path | None = None,
+    path_prefix: Path | None = None,
     seeds: list[int] | None = None,
     print_table: bool = True,
 ) -> None:
-    if output_prefix is None:
-        output_prefix = args.output_prefix
+    if path_prefix is None:
+        path_prefix = output_prefix(args)
     if seeds is None:
         seeds = resolve_seeds(args)
+    rows = sorted(merge_rows(load_existing_rows(path_prefix), rows), key=row_sort_key)
 
     payload = {
         "config": {
             "checkpoint_dir": str(args.checkpoint_dir),
             "sizes": args.sizes,
             "solvers": args.solvers,
+            "force": args.force,
             "seeds": seeds,
             "device": str(device),
             "dtype": "float32",
@@ -1070,6 +1197,7 @@ def write_results(
             "cg_cgnr_damping": args.cg_cgnr_damping,
             "lissa_scale_calibration": not args.no_lissa_scale_calibration,
             "kfac_scale_calibration": not args.no_kfac_scale_calibration,
+            "hvp_num_batches": args.hvp_num_batches,
             "time_limit_sec": args.time_limit_sec,
             "keep_running_after_timeout": args.keep_running_after_timeout,
             "wait_for_idle_gpu": args.wait_for_idle_gpu,
@@ -1081,9 +1209,9 @@ def write_results(
         "results": rows,
     }
 
-    output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    json_path = output_prefix.with_suffix(".json")
-    csv_path = output_prefix.with_suffix(".csv")
+    path_prefix.parent.mkdir(parents=True, exist_ok=True)
+    json_path = path_prefix.with_suffix(".json")
+    csv_path = path_prefix.with_suffix(".csv")
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     fieldnames = [
@@ -1136,12 +1264,6 @@ def write_results(
         print_summary(rows)
 
 
-def seed_output_prefix(args: argparse.Namespace, seed: int) -> Path:
-    return (
-        args.output_prefix.parent / "cifar10" / f"seed_{seed}" / args.output_prefix.name
-    )
-
-
 def row_memory_mb(row: dict) -> float:
     cuda_peak_mb = row.get("cuda_peak_mb")
     if cuda_peak_mb is not None and math.isfinite(float(cuda_peak_mb)):
@@ -1182,6 +1304,7 @@ def run_seed(
     device: torch.device,
     dtype: torch.dtype,
     rows: list[dict],
+    existing_keys: set[tuple[str, str, str]],
 ) -> bool:
     seed_args = copy(args)
     seed_args.seed = seed
@@ -1198,6 +1321,15 @@ def run_seed(
 
     print(f"\nseed={seed}")
     for size in seed_args.sizes:
+        pending_solvers = [
+            solver
+            for solver in seed_args.solvers
+            if seed_args.force or (str(seed), str(size), solver) not in existing_keys
+        ]
+        if not pending_solvers:
+            print(f"\nsize={size} already up to date; skipping")
+            continue
+
         path = checkpoint_path(seed_args, size)
         if not path.is_file():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -1206,18 +1338,24 @@ def run_seed(
         actual_params = int(checkpoint.get("actual_params", count_parameters(model)))
         target_params = int(checkpoint.get("target_params", 0))
 
-        curvature_outputs = model(curvature_inputs)
-        total_loss = criterion(curvature_outputs, curvature_targets)
         target_outputs = model(target_inputs)
         target_loss = criterion(target_outputs, target_targets)
         g_full = compute_gradient(model, target_loss, retain_graph=True)
+        curvature_hvp = make_batched_hvp_fn(
+            model=model,
+            inputs=curvature_inputs,
+            targets=curvature_targets,
+            criterion=criterion,
+            device=device,
+            num_batches=seed_args.hvp_num_batches,
+        )
         hg_full: torch.Tensor | None = None
         small_indices: torch.Tensor | None = None
 
         def get_hg_full() -> torch.Tensor:
             nonlocal hg_full
             if hg_full is None:
-                hg_full = hvp(model, total_loss, g_full)
+                hg_full = curvature_hvp(g_full)
             return hg_full
 
         def get_small_indices() -> torch.Tensor:
@@ -1234,7 +1372,7 @@ def run_seed(
             return small_indices
 
         def classical_h_times(value: torch.Tensor) -> torch.Tensor:
-            return hvp(model, total_loss, value)
+            return curvature_hvp(value)
 
         classical_rhs_norm = torch.linalg.norm(g_full).item()
         small_selected_params = (
@@ -1245,6 +1383,10 @@ def run_seed(
         print(f"\nsize={size}")
 
         for solver in seed_args.solvers:
+            key = (str(seed), str(size), solver)
+            if not seed_args.force and key in existing_keys:
+                print(f"  {solver:12s} reused existing result")
+                continue
             if solver == "p_lissa_full":
                 system = "restricted_normal_full"
                 hvp_per_a_times = 2
@@ -1277,14 +1419,12 @@ def run_seed(
 
             if solver == "p_lissa_full":
                 rhs, a_times = build_full_normal_system(
-                    model=model,
-                    total_loss=total_loss,
+                    hvp_fn=curvature_hvp,
                     hg_full=get_hg_full(),
                 )
             elif solver == "p_lissa_0p1":
                 rhs, a_times = build_restricted_system_from_cached_hg(
-                    model=model,
-                    total_loss=total_loss,
+                    hvp_fn=curvature_hvp,
                     g_full=g_full,
                     hg_full=get_hg_full(),
                     index_list=get_small_indices(),
@@ -1326,6 +1466,7 @@ def run_seed(
                 }
             )
             rows.append(row)
+            existing_keys.add(key)
             mem_cuda = (
                 "None"
                 if row["cuda_peak_mb"] is None
@@ -1338,7 +1479,7 @@ def run_seed(
             )
             if row["error"]:
                 print(f"    error: {row['error']}")
-            if row["status"] == "timeout" and not seed_args.keep_running_after_timeout:
+            if row["status"] == "timeout" and seed_args.stop_after_timeout:
                 print("    stopping: solver exceeded time limit")
                 return False
 
@@ -1353,9 +1494,17 @@ def main() -> None:
     args = parse_args()
     device = torch.device(args.device)
     dtype = torch.float32
-    rows = []
+    rows = sorted(load_existing_rows(output_prefix(args)), key=row_sort_key)
+    existing_keys = {result_row_key(row) for row in rows}
 
     for seed in resolve_seeds(args):
+        seed_prefix = seed_output_prefix(args, seed)
+        seed_existing_rows = load_existing_rows(seed_prefix)
+        for row in seed_existing_rows:
+            key = result_row_key(row)
+            if key not in existing_keys:
+                rows.append(row)
+                existing_keys.add(key)
         seed_start = len(rows)
         should_continue = run_seed(
             args,
@@ -1363,6 +1512,7 @@ def main() -> None:
             device=device,
             dtype=dtype,
             rows=rows,
+            existing_keys=existing_keys,
         )
         seed_rows = rows[seed_start:]
         if seed_rows:
@@ -1370,7 +1520,7 @@ def main() -> None:
                 args,
                 device,
                 seed_rows,
-                output_prefix=seed_output_prefix(args, seed),
+                path_prefix=seed_output_prefix(args, seed),
                 seeds=[seed],
                 print_table=False,
             )
