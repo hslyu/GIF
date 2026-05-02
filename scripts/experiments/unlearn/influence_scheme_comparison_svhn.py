@@ -59,7 +59,7 @@ METHOD_SPECS = {
         "uses_param_ratio": False,
         "requires_trajectory": True,
     },
-    "hypeinf": {"label": "HypeInf", "uses_param_ratio": False},
+    "hypeinf": {"label": "HyperInf", "uses_param_ratio": False},
     "datainf": {"label": "DataInf", "uses_param_ratio": False},
     "freezing": {"label": "Freezing", "uses_param_ratio": True},
     "ekfac": {

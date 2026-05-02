@@ -24,9 +24,9 @@ METHODS = [
     ("classical_if", "Classic IF"),
     ("second_order_if", "Second-order IF"),
     ("tracin", "TracIn"),
-    ("hypeinf", "HypeInf"),
+    ("hypeinf", "HyperInf"),
     ("datainf", "DataInf"),
-    ("freezing", "Schoppia"),
+    ("freezing", "Schioppa"),
     ("ekfac", "EKFAC"),
     ("gif", "Ours"),
 ]

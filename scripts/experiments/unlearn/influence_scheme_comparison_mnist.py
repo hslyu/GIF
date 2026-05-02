@@ -81,7 +81,7 @@ METHOD_SPECS = {
         "requires_trajectory": True,
     },
     "hypeinf": {
-        "label": "HypeInf",
+        "label": "HyperInf",
         "uses_param_ratio": False,
     },
     "datainf": {
