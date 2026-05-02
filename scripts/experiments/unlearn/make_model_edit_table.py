@@ -27,6 +27,7 @@ METHODS = [
     ("hypeinf", "HypeInf"),
     ("datainf", "DataInf"),
     ("freezing", "Schoppia"),
+    ("ekfac", "EKFAC"),
     ("gif", "Ours"),
 ]
 
