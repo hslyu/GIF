@@ -112,8 +112,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=12)
-    parser.add_argument("--num-target-batches", type=int, default=10)
-    parser.add_argument("--num-hvp-batches", type=int, default=2)
+    parser.add_argument("--num-target-batches", type=int, default=20)
+    parser.add_argument("--num-hvp-batches", type=int, default=4)
     parser.add_argument(
         "--selectors",
         nargs="+",
@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iter", type=int, default=200)
     parser.add_argument("--edit-scale", type=float, default=0.1)
     parser.add_argument("--max-update-steps", type=int, default=80)
-    parser.add_argument("--target-self-acc", type=float, default=0.1)
+    parser.add_argument("--target-self-acc", type=float, default=1.0)
     parser.add_argument("--caps-lam", type=float, default=1e-4)
     parser.add_argument("--dataset-id", type=str, default=None)
     parser.add_argument("--max-text-length", type=int, default=80)
@@ -489,7 +489,7 @@ def run_single_trial(
 
     criterion = nn.CrossEntropyLoss()
     all_target_ids, all_target_masks, all_target_targets = collect_target_examples(
-        bundle.test_loader, args.target_label
+        bundle.train_loader, args.target_label
     )
     sampled_ids, sampled_masks, sampled_targets = sample_target_batches(
         all_target_ids,
@@ -499,7 +499,7 @@ def run_single_trial(
         args.num_target_batches,
     )
     retained_ids, retained_masks, retained_targets = collect_retained_examples(
-        bundle.test_loader, args.target_label, 1
+        bundle.train_loader, args.target_label, 1
     )
     hvp_ids, hvp_masks, hvp_targets = sample_hvp_batch(
         retained_ids,
