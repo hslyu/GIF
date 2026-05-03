@@ -15,10 +15,10 @@ unlearning framework.
 ### Source
 - `src/gif/solvers/hyperinf.py`
   - `hyperinf_inverse(...)`
-- `src/gif/influence/hypeinf.py`
+- `src/gif/influence/hyperinf.py`
   - `hyperinf_update(...)`
   - `HyperInfluence`
-  - `HypeInf` alias
+  - `HyperInf` alias
 
 ### Script integration
 - `scripts/search/_mnist_unlearning_common.py`

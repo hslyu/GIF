@@ -63,7 +63,7 @@ METHOD_SPECS = {
         "uses_param_ratio": False,
         "requires_trajectory": True,
     },
-    "hypeinf": {"label": "HyperInf", "uses_param_ratio": False},
+    "hyperinf": {"label": "HyperInf", "uses_param_ratio": False},
     "datainf": {"label": "DataInf", "uses_param_ratio": False},
     "freezing": {"label": "Freezing", "uses_param_ratio": True},
     "ekfac": {
@@ -77,7 +77,7 @@ DEFAULT_METHODS = [
     "classical_if",
     "second_order_if",
     "tracin",
-    "hypeinf",
+    "hyperinf",
     "datainf",
     "freezing",
     "ekfac",
@@ -143,7 +143,7 @@ def parse_args(
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--mu", type=float, default=3.0)
     parser.add_argument("--max-iter", type=int, default=200)
-    parser.add_argument("--hypeinf-max-iter", type=int, default=5)
+    parser.add_argument("--hyperinf-max-iter", type=int, default=5)
     parser.add_argument("--solver-power-iters", type=int, default=2)
     parser.add_argument("--edit-scale", type=float, default=0.05)
     parser.add_argument("--max-update-steps", type=int, default=200)
@@ -711,7 +711,7 @@ def compute_method_update(
             )
             * target_scaling
         )
-    elif method_name == "hypeinf":
+    elif method_name == "hyperinf":
         influence = hyperinf_update_from_hvp_fn(
             model,
             target_loss=target_loss,
@@ -719,7 +719,7 @@ def compute_method_update(
             hvp_fn=retained_hvp_fn,
             beta_scale=args.hyperinf_beta_scale,
             tol=args.tol,
-            max_iter=args.hypeinf_max_iter,
+            max_iter=args.hyperinf_max_iter,
             power_iter_steps=args.solver_power_iters,
         )
     elif method_name == "datainf":
@@ -1164,7 +1164,7 @@ def run_single_trial(
             "tol": args.tol,
             "mu": args.mu,
             "max_iter": args.max_iter,
-            "hypeinf_max_iter": args.hypeinf_max_iter,
+            "hyperinf_max_iter": args.hyperinf_max_iter,
             "edit_scale": args.edit_scale,
             "max_update_steps": args.max_update_steps,
             "gif_max_self_acc_for_selection": args.gif_max_self_acc_for_selection,

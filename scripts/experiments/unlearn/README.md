@@ -15,7 +15,7 @@ Target methods:
 - `classical_if`
 - `second_order_if`
 - `tracin`
-- `hypeinf`
+- `hyperinf`
 - `datainf`
 - `freezing`
 - `ekfac`

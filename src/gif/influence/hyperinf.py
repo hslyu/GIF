@@ -70,4 +70,4 @@ class HyperInfluence:
         )
 
 
-HypeInf = HyperInfluence
+HyperInf = HyperInfluence

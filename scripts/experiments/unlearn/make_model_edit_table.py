@@ -21,13 +21,13 @@ DATASETS = [
 
 METHODS = [
     ("retrain", "Retrain"),
-    ("classical_if", "Classic IF"),
-    ("second_order_if", "Second-order IF"),
-    ("tracin", "TracIn"),
-    ("hypeinf", "HyperInf"),
-    ("datainf", "DataInf"),
-    ("freezing", "Schioppa"),
-    ("ekfac", "EKFAC"),
+    ("classical_if", r"Classic IF~\cite{Koh2017_IF}"),
+    ("second_order_if", r"Second-order IF~\cite{Basu20-SecondIF}"),
+    ("tracin", r"TracIn~\cite{Pruthi2020-TracIn}"),
+    ("hyperinf", r"HyperInf~\cite{zhou2025-hyperinf}"),
+    ("datainf", r"DataInf~\cite{kwon2024datainf}"),
+    ("freezing", r"Schioppa~\cite{schioppa2022-scalingIF}"),
+    ("ekfac", r"EKFAC~\cite{grosse2023-ekfac,martens15-kfac}"),
     ("gif", "Ours"),
 ]
 
@@ -300,8 +300,9 @@ def build_table(
     lines = [
         r"\begin{table*}[t]",
         r"\centering",
-        r"\caption{Comprehensive evaluation of model editing ability for each influence-function-based scheme.",
-        r"For every dataset, we report two metrics: \textit{Retain} ($\uparrow$) and \textit{Unlearn} ($\downarrow$).}",
+        r"\caption{Data-removal model editing results for influence-based methods.",
+        r"\textit{Retain} is the accuracy on non-target examples and should be high;",
+        r"\textit{Unlearn} is the accuracy on target examples and should be low.}",
         r"\label{tab:model_edit_comparison}",
         r"\setlength{\tabcolsep}{4pt}",
         r"\begin{adjustbox}{width=\textwidth}",

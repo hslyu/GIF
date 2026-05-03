@@ -5,7 +5,7 @@ from .cg import CGInfluence, cg_update
 from .datainf import DataInf, DataInfluence, datainf_update
 from .freezing import FreezingInfluence, freeze_influence, iphvp_fif
 from .generalized import GeneralizedInfluence, generalized_influence
-from .hypeinf import HypeInf, HyperInfluence, hyperinf_update
+from .hyperinf import HyperInf, HyperInfluence, hyperinf_update
 from .kfac import (
     EKFACInfluence,
     KFACFactorCollector,
@@ -39,8 +39,8 @@ __all__ = [
     "EKFACInfluence",
     "FreezingInfluence",
     "GeneralizedInfluence",
+    "HyperInf",
     "HyperInfluence",
-    "HypeInf",
     "InfluenceFunction",
     "InfluenceMethod",
     "KFACFactorCollector",

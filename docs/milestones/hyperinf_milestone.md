@@ -55,7 +55,7 @@
 
 즉:
 - solver는 `src/gif/solvers/`에 둔다
-- method wrapper는 `src/gif/influence/hypeinf.py`에 둔다
+- method wrapper는 `src/gif/influence/hyperinf.py`에 둔다
 - 공통 autodiff는 기존 `gif.influence.common`을 재사용한다
 - script는 기존 benchmark API를 그대로 사용한다
 
@@ -77,7 +77,7 @@
 ### Repository placement
 - `src/gif/solvers/hyperinf.py`
   - HyperINF inverse iteration core
-- `src/gif/influence/hypeinf.py`
+- `src/gif/influence/hyperinf.py`
   - model/loss/index_list를 받아 update를 반환하는 wrapper
 
 이렇게 나누면:
@@ -119,7 +119,7 @@ def hyperinf_inverse(..., return_details=False):
 - residual computation
 - optional iteration trace
 
-## `src/gif/influence/hypeinf.py`
+## `src/gif/influence/hyperinf.py`
 
 예상 공개 API:
 
@@ -166,7 +166,7 @@ def hyperinf_update(...)
 
 작업:
 - [x] `src/gif/solvers/hyperinf.py` 생성
-- [x] `src/gif/influence/hypeinf.py` placeholder를 실제 wrapper 형태로 교체
+- [x] `src/gif/influence/hyperinf.py` placeholder를 실제 wrapper 형태로 교체
 - [x] solver input/output contract 고정
 - [x] details payload schema 고정
 
