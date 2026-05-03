@@ -1397,26 +1397,6 @@ def run_seed(
                 system = "classical_hessian"
                 hvp_per_a_times = 1
 
-            if solver == "lanczos" and size == "20m":
-                row = skipped_row(
-                    solver=solver,
-                    reason="lanczos disabled for CIFAR-10 20m",
-                    system=system,
-                    hvp_per_a_times=hvp_per_a_times,
-                    size=size,
-                    path=path,
-                    checkpoint=checkpoint,
-                    target_params=target_params,
-                    actual_params=actual_params,
-                    small_selected_params=small_selected_params,
-                    p_lissa_small_ratio=seed_args.p_lissa_small_ratio,
-                    classical_rhs_norm=classical_rhs_norm,
-                )
-                row["seed"] = seed
-                rows.append(row)
-                print(f"  {solver:12s} skipped: {row['error']}")
-                continue
-
             if solver == "p_lissa_full":
                 rhs, a_times = build_full_normal_system(
                     hvp_fn=curvature_hvp,

@@ -20,6 +20,7 @@ import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import font_manager as fm  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib import patheffects as pe  # noqa: E402
 from matplotlib.patches import ConnectionPatch, Rectangle  # noqa: E402
 from matplotlib.ticker import (  # noqa: E402
     FixedFormatter,
@@ -35,9 +36,10 @@ PRETENDARD_FONT_DIR = Path("/fast/hslyu/font")
 PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
 PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
 
-TICK_FONTSIZE = 10
-AXIS_LABEL_FONTSIZE = 10
+TICK_FONTSIZE = 12
+AXIS_LABEL_FONTSIZE = 12
 LEGEND_FONTSIZE = 10
+DAMPING_LABEL_FONTSIZE = 10
 PLOT_FIGSIZE = (18.0, 3)
 PLOT_WSPACE = 0.35
 PLOT_WIDTH_RATIOS = [1.0, 1.0, 1.0, 0.3]
@@ -99,6 +101,26 @@ METRICS = [
     ("residual", "Regularized residual", True),
     ("memory_mb", "Memory (MB)", True),
     ("elapsed_s", "Elapsed time (s)", False),
+]
+DAMPING_ANNOTATIONS = [
+    {
+        "line_solver": "ekfac",
+        "value_solvers": ("ekfac", "kfac"),
+        "x_min": 2e4,
+        "x_max": 1e5,
+    },
+    {
+        "line_solver": "lissa",
+        "value_solvers": ("lissa",),
+        "x_min": 1e5,
+        "x_max": 5e5,
+    },
+    {
+        "line_solver": "schulz",
+        "value_solvers": ("schulz",),
+        "x_min": 5e5,
+        "x_max": 2e6,
+    },
 ]
 
 for font_path in (PRETENDARD_REGULAR_PATH, PRETENDARD_MEDIUM_PATH):
@@ -273,6 +295,101 @@ def ordered_solvers(rows: list[dict[str, Any]]) -> list[str]:
     solvers = [solver for solver in SOLVER_ORDER if solver in present]
     solvers += sorted(present - set(solvers))
     return solvers
+
+
+def format_damping(value: float) -> str:
+    if not math.isfinite(value):
+        return "nan"
+    if value == 0.0:
+        return "0"
+    if 1e-3 <= abs(value) < 1e3:
+        return f"{value:g}".replace(".", r"\!.\!")
+    mantissa, exponent = f"{value:.0e}".split("e")
+    if mantissa == "1":
+        return rf"10\!^{{{int(exponent)}}}"
+    return rf"{mantissa}\!\cdot\!10\!^{{{int(exponent)}}}"
+
+
+def solver_damping_label(
+    rows: list[dict[str, Any]],
+    solvers: tuple[str, ...],
+) -> str | None:
+    values = sorted(
+        {
+            value
+            for row in rows
+            if str(row.get("solver", "")) in solvers
+            and math.isfinite(value := as_float(row.get("damping")))
+            and value != 0.0
+        }
+    )
+    if not values:
+        return None
+    return "$\\lambda\\!\\!=\\!\\!" + r"\!/".join(format_damping(value) for value in values) + "$"
+
+
+def damping_annotation_point(
+    segments: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    x_min: float,
+    x_max: float,
+    log_y: bool,
+) -> tuple[float, float] | None:
+    target_x = math.sqrt(x_min * x_max)
+    candidates: list[tuple[float, float]] = []
+    for x_smooth, y_smooth, _ in segments:
+        mask = (x_smooth >= x_min) & (x_smooth <= x_max)
+        if not np.any(mask):
+            continue
+        x_values = x_smooth[mask]
+        y_values = y_smooth[mask]
+        index = int(np.argmin(np.abs(np.log(x_values) - math.log(target_x))))
+        y_value = float(np.power(10.0, y_values[index])) if log_y else float(y_values[index])
+        candidates.append((float(x_values[index]), y_value))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: abs(math.log(item[0]) - math.log(target_x)))
+
+
+def add_damping_annotation(
+    ax,
+    rows: list[dict[str, Any]],
+    solver: str,
+    segments: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    log_y: bool,
+    color: str,
+) -> None:
+    for spec in DAMPING_ANNOTATIONS:
+        if solver != spec["line_solver"]:
+            continue
+        label = solver_damping_label(
+            rows,
+            spec["value_solvers"],
+        )
+        point = damping_annotation_point(
+            segments,
+            x_min=float(spec["x_min"]),
+            x_max=float(spec["x_max"]),
+            log_y=log_y,
+        )
+        if label is None or point is None:
+            return
+        text = ax.annotate(
+            label,
+            xy=point,
+            xytext=(0, 0),
+            textcoords="offset points",
+            color=color,
+            fontproperties=pretendard_medium(DAMPING_LABEL_FONTSIZE),
+            fontsize=DAMPING_LABEL_FONTSIZE,
+            ha="center",
+            va="center",
+            zorder=300,
+            clip_on=False,
+        )
+        text.set_path_effects([pe.withStroke(linewidth=4.2, foreground="white")])
+        return
 
 
 def build_series(
@@ -583,6 +700,15 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 zorder=line_zorder + 1,
                 label="_nolegend_",
             )
+            if metric == "residual":
+                add_damping_annotation(
+                    ax,
+                    rows,
+                    solver,
+                    segments,
+                    log_y=use_log_y,
+                    color=color,
+                )
             if metric == "memory_mb":
                 zoom_segments = []
                 for x_smooth, y_smooth, spread_smooth in segments:
@@ -637,7 +763,7 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
         if use_log_y:
             ax.set_yscale("log")
         if metric == "memory_mb":
-            ax.set_ylim(1e1, 3e3)
+            ax.set_ylim(1e1, 1e5)
         if metric == "elapsed_s":
             ax.set_ylim(0.0, 15.0)
             ax.set_yticks([0, 3, 6, 9, 12, 15])
@@ -657,7 +783,7 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
         handles,
         [handle.get_label() for handle in handles],
         loc="center",
-        bbox_to_anchor=(0.5, 0.5),
+        bbox_to_anchor=(0.5, 0.45),
         frameon=True,
         fancybox=True,
         facecolor="none",

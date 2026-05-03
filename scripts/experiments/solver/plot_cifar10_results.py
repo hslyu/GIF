@@ -19,15 +19,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import font_manager as fm  # noqa: E402
+from matplotlib import patheffects as pe  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
-from matplotlib.patches import ConnectionPatch, Rectangle  # noqa: E402
-from matplotlib.ticker import (  # noqa: E402
-    FixedFormatter,
-    FixedLocator,
-    NullFormatter,
-    NullLocator,
-)
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes  # noqa: E402
 from scipy.interpolate import PchipInterpolator  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -35,9 +28,10 @@ PRETENDARD_FONT_DIR = Path("/fast/hslyu/font")
 PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
 PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
 
-TICK_FONTSIZE = 10
-AXIS_LABEL_FONTSIZE = 10
+TICK_FONTSIZE = 12
+AXIS_LABEL_FONTSIZE = 12
 LEGEND_FONTSIZE = 10
+DAMPING_LABEL_FONTSIZE = 10
 PLOT_FIGSIZE = (18.0, 3)
 PLOT_WSPACE = 0.35
 PLOT_WIDTH_RATIOS = [1.0, 1.0, 1.0, 0.3]
@@ -92,12 +86,30 @@ MARKERS = {
 }
 GRID_KW = {"linestyle": (0, (5, 5)), "linewidth": 0.5, "color": "#e0e0e0"}
 PCHIP_SAMPLES_PER_INTERVAL = 24
-MEMORY_ZOOM_SIZE_LABEL = "500k"
-MEMORY_ZOOM_X_FACTOR = 1.55
 METRICS = [
     ("residual", "Regularized residual", True),
     ("memory_mb", "Memory (MB)", True),
     ("elapsed_s", "Elapsed time (s)", False),
+]
+DAMPING_ANNOTATIONS = [
+    {
+        "line_solver": "ekfac",
+        "value_solvers": ("ekfac", "kfac"),
+        "x_min": 2e4,
+        "x_max": 1e5,
+    },
+    {
+        "line_solver": "lissa",
+        "value_solvers": ("lissa",),
+        "x_min": 1e5,
+        "x_max": 5e5,
+    },
+    {
+        "line_solver": "schulz",
+        "value_solvers": ("schulz",),
+        "x_min": 5e5,
+        "x_max": 2e6,
+    },
 ]
 
 for font_path in (PRETENDARD_REGULAR_PATH, PRETENDARD_MEDIUM_PATH):
@@ -274,6 +286,107 @@ def ordered_solvers(rows: list[dict[str, Any]]) -> list[str]:
     return solvers
 
 
+def format_damping(value: float) -> str:
+    if not math.isfinite(value):
+        return "nan"
+    if value == 0.0:
+        return "0"
+    if 1e-3 <= abs(value) < 1e3:
+        return f"{value:g}".replace(".", r"\!.\!")
+    mantissa, exponent = f"{value:.0e}".split("e")
+    if mantissa == "1":
+        return rf"10\!^{{{int(exponent)}}}"
+    return rf"{mantissa}\!\cdot\!10\!^{{{int(exponent)}}}"
+
+
+def solver_damping_label(
+    rows: list[dict[str, Any]],
+    solvers: tuple[str, ...],
+) -> str | None:
+    values = sorted(
+        {
+            value
+            for row in rows
+            if str(row.get("solver", "")) in solvers
+            and math.isfinite(value := as_float(row.get("damping")))
+            and value != 0.0
+        }
+    )
+    if not values:
+        return None
+    return (
+        "$\\lambda\\!\\!=\\!\\!"
+        + r"\!/".join(format_damping(value) for value in values)
+        + "$"
+    )
+
+
+def damping_annotation_point(
+    segments: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    x_min: float,
+    x_max: float,
+    log_y: bool,
+) -> tuple[float, float] | None:
+    target_x = math.sqrt(x_min * x_max)
+    candidates: list[tuple[float, float]] = []
+    for x_smooth, y_smooth, _ in segments:
+        mask = (x_smooth >= x_min) & (x_smooth <= x_max)
+        if not np.any(mask):
+            continue
+        x_values = x_smooth[mask]
+        y_values = y_smooth[mask]
+        index = int(np.argmin(np.abs(np.log(x_values) - math.log(target_x))))
+        y_value = (
+            float(np.power(10.0, y_values[index])) if log_y else float(y_values[index])
+        )
+        candidates.append((float(x_values[index]), y_value))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: abs(math.log(item[0]) - math.log(target_x)))
+
+
+def add_damping_annotation(
+    ax,
+    rows: list[dict[str, Any]],
+    solver: str,
+    segments: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    log_y: bool,
+    color: str,
+) -> None:
+    for spec in DAMPING_ANNOTATIONS:
+        if solver != spec["line_solver"]:
+            continue
+        label = solver_damping_label(
+            rows,
+            spec["value_solvers"],
+        )
+        point = damping_annotation_point(
+            segments,
+            x_min=float(spec["x_min"]),
+            x_max=float(spec["x_max"]),
+            log_y=log_y,
+        )
+        if label is None or point is None:
+            return
+        text = ax.annotate(
+            label,
+            xy=point,
+            xytext=(0, 0),
+            textcoords="offset points",
+            color=color,
+            fontproperties=pretendard_medium(DAMPING_LABEL_FONTSIZE),
+            fontsize=DAMPING_LABEL_FONTSIZE,
+            ha="center",
+            va="center",
+            zorder=300,
+            clip_on=False,
+        )
+        text.set_path_effects([pe.withStroke(linewidth=4.2, foreground="white")])
+        return
+
+
 def build_series(
     rows: list[dict[str, Any]],
     sizes: list[str],
@@ -296,7 +409,9 @@ def build_series(
                 value = math.log10(value)
             by_size[size].append(value)
 
-    xs = np.asarray([size_params[size] for size in sizes if size in size_params], dtype=float)
+    xs = np.asarray(
+        [size_params[size] for size in sizes if size in size_params], dtype=float
+    )
     ys = []
     spread = []
     for size in sizes:
@@ -309,22 +424,7 @@ def build_series(
 
 
 def elapsed_time_limits(rows: list[dict[str, Any]]) -> tuple[float, float]:
-    values = []
-    for row in rows:
-        value = as_float(row.get("time_sec"))
-        if math.isfinite(value) and value > 0.0:
-            values.append(value)
-
-    if not values:
-        return 0.5, 1.0
-
-    min_value = min(values)
-    max_value = max(values)
-    lower = max(min_value * 0.9, 0.1)
-    upper = max_value * 1.05
-    if math.isclose(lower, upper):
-        upper = lower * 1.25
-    return lower, upper
+    return 0.0, 350.0
 
 
 def format_param_count(value: float) -> str:
@@ -371,164 +471,6 @@ def smooth_segments(
     return segments
 
 
-def add_memory_zoom_inset(
-    ax,
-    plot_entries: list[dict[str, Any]],
-    *,
-    center_x: float,
-) -> None:
-    zoom_xmin = center_x / MEMORY_ZOOM_X_FACTOR
-    zoom_xmax = center_x * MEMORY_ZOOM_X_FACTOR
-    zoom_ax = inset_axes(
-        ax,
-        width="40%",
-        height="30%",
-        loc="upper left",
-        bbox_to_anchor=(0.08, -0.04, 1.0, 1.0),
-        bbox_transform=ax.transAxes,
-        borderpad=0.7,
-    )
-    zoom_ax.set_zorder(100)
-    zoom_ax.set_facecolor("white")
-    zoom_ax.add_patch(
-        Rectangle(
-            (0.0, 0.0),
-            1.0,
-            1.0,
-            transform=zoom_ax.transAxes,
-            facecolor="white",
-            edgecolor="none",
-            zorder=-100,
-            clip_on=False,
-        )
-    )
-    zoom_y_values: list[float] = []
-
-    for entry in plot_entries:
-        if entry["solver"] == "lanczos":
-            continue
-        color = entry["color"]
-        marker = entry["marker"]
-        line_zorder = entry["line_zorder"]
-        for x_smooth, y_smooth, _spread_smooth in entry["segments"]:
-            mask = (zoom_xmin <= x_smooth) & (x_smooth <= zoom_xmax)
-            if not np.any(mask):
-                continue
-            y_zoom = y_smooth[mask]
-            zoom_ax.plot(
-                x_smooth[mask],
-                y_zoom,
-                linewidth=1.8,
-                color=color,
-                zorder=line_zorder,
-            )
-            zoom_y_values.extend(y_zoom[np.isfinite(y_zoom) & (y_zoom > 0.0)].tolist())
-
-        marker_xs = entry["marker_xs"]
-        marker_ys = entry["marker_ys"]
-        marker_mask = (zoom_xmin <= marker_xs) & (marker_xs <= zoom_xmax)
-        if np.any(marker_mask):
-            marker_y_zoom = marker_ys[marker_mask]
-            zoom_ax.plot(
-                marker_xs[marker_mask],
-                marker_y_zoom,
-                linestyle="None",
-                marker=marker,
-                markersize=6.2,
-                color=color,
-                markerfacecolor=marker_face_color(color),
-                markeredgecolor=marker_edge_color(color),
-                markeredgewidth=1.0,
-                zorder=line_zorder + 1,
-            )
-            zoom_y_values.extend(
-                marker_y_zoom[
-                    np.isfinite(marker_y_zoom) & (marker_y_zoom > 0.0)
-                ].tolist()
-            )
-
-    if not zoom_y_values:
-        zoom_ax.remove()
-        return
-
-    y_min = min(zoom_y_values)
-    y_max = max(zoom_y_values)
-    if math.isclose(y_min, y_max):
-        y_min *= 0.9
-        y_max *= 1.1
-
-    log_min = math.log10(y_min)
-    log_max = math.log10(y_max)
-    pad = max((log_max - log_min) * 0.18, 0.05)
-    zoom_ymin = max(10 ** (log_min - pad), np.finfo(float).tiny)
-    zoom_ymax = max(10 ** (log_max + pad), 3000.0 * 1.05)
-    zoom_yticks = np.asarray([1000.0, 1500.0, 3000.0], dtype=float)
-
-    zoom_ax.set_xscale("log")
-    zoom_ax.set_yscale("log")
-    zoom_ax.set_xlim(zoom_xmin, zoom_xmax)
-    zoom_ax.set_ylim(zoom_ymin, zoom_ymax)
-    zoom_ax.xaxis.set_major_locator(FixedLocator([center_x]))
-    zoom_ax.xaxis.set_major_formatter(FixedFormatter([format_param_count(center_x)]))
-    zoom_ax.xaxis.set_minor_locator(NullLocator())
-    zoom_ax.xaxis.set_minor_formatter(NullFormatter())
-    zoom_ax.yaxis.set_major_locator(FixedLocator(zoom_yticks))
-    zoom_ax.yaxis.set_major_formatter(
-        FixedFormatter([f"{tick:,.0f}" for tick in zoom_yticks])
-    )
-    zoom_ax.yaxis.set_minor_locator(NullLocator())
-    zoom_ax.yaxis.set_minor_formatter(NullFormatter())
-    zoom_ax.tick_params(
-        which="both",
-        labelsize=TICK_FONTSIZE - 2,
-        direction="out",
-        pad=1,
-    )
-    apply_tick_font(zoom_ax, TICK_FONTSIZE - 2)
-    draw_background_grid(zoom_ax)
-
-    ax.add_patch(
-        Rectangle(
-            (zoom_xmin, zoom_ymin),
-            zoom_xmax - zoom_xmin,
-            zoom_ymax - zoom_ymin,
-            fill=False,
-            edgecolor="0.25",
-            linewidth=1.0,
-            linestyle="--",
-            zorder=12,
-        )
-    )
-    ax.figure.add_artist(
-        ConnectionPatch(
-            xyA=(zoom_xmin, zoom_ymin),
-            coordsA=ax.transData,
-            axesA=ax,
-            xyB=(0.0, 0.0),
-            coordsB=zoom_ax.transAxes,
-            axesB=zoom_ax,
-            color="0.45",
-            linewidth=0.8,
-            clip_on=False,
-            zorder=11,
-        )
-    )
-    ax.figure.add_artist(
-        ConnectionPatch(
-            xyA=(zoom_xmax, zoom_ymax),
-            coordsA=ax.transData,
-            axesA=ax,
-            xyB=(1.0, 1.0),
-            coordsB=zoom_ax.transAxes,
-            axesB=zoom_ax,
-            color="0.45",
-            linewidth=0.8,
-            clip_on=False,
-            zorder=11,
-        )
-    )
-
-
 def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) -> Path:
     rows = enrich_rows(rows)
     sizes = ordered_sizes(rows)
@@ -551,7 +493,6 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
     handles = []
 
     for ax, (metric, ylabel, use_log_y) in zip(metric_axes, METRICS):
-        plot_entries: list[dict[str, Any]] = []
         for solver_index, solver in enumerate(solvers):
             if metric == "elapsed_s" and solver == "schulz":
                 continue
@@ -605,25 +546,14 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 zorder=line_zorder + 1,
                 label="_nolegend_",
             )
-            if metric == "memory_mb":
-                zoom_segments = []
-                for x_smooth, y_smooth, spread_smooth in segments:
-                    if use_log_y:
-                        zoom_segments.append(
-                            (x_smooth, np.power(10.0, y_smooth), spread_smooth)
-                        )
-                    else:
-                        zoom_segments.append((x_smooth, y_smooth, spread_smooth))
-                plot_entries.append(
-                    {
-                        "segments": zoom_segments,
-                        "solver": solver,
-                        "marker_xs": xs[finite],
-                        "marker_ys": np.power(10.0, ys[finite]) if use_log_y else ys[finite],
-                        "color": color,
-                        "marker": marker,
-                        "line_zorder": line_zorder,
-                    }
+            if metric == "residual":
+                add_damping_annotation(
+                    ax,
+                    rows,
+                    solver,
+                    segments,
+                    log_y=use_log_y,
+                    color=color,
                 )
             if metric == METRICS[0][0]:
                 handles.append(
@@ -657,15 +587,10 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
         if use_log_y:
             ax.set_yscale("log")
         if metric == "memory_mb":
-            ax.set_ylim(1e2, 4e4)
-            if MEMORY_ZOOM_SIZE_LABEL in size_params:
-                add_memory_zoom_inset(
-                    ax,
-                    plot_entries,
-                    center_x=size_params[MEMORY_ZOOM_SIZE_LABEL],
-                )
+            ax.set_ylim(1e2, 1e5)
         if metric == "elapsed_s":
-            ax.set_ylim(elapsed_ymin, min(elapsed_ymax, 100.0))
+            ax.set_ylim(elapsed_ymin, elapsed_ymax)
+            ax.set_yticks([0, 100, 200, 300])
         ax.set_xlim(xs.min() * 0.85, xs.max() * 1.15)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
