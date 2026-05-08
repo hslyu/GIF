@@ -29,12 +29,13 @@ PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
 PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
 
 TICK_FONTSIZE = 12
-AXIS_LABEL_FONTSIZE = 12
-LEGEND_FONTSIZE = 10
+AXIS_LABEL_FONTSIZE = 14
+LEGEND_FONTSIZE = 11.5
 DAMPING_LABEL_FONTSIZE = 10
-PLOT_FIGSIZE = (18.0, 3)
-PLOT_WSPACE = 0.35
+PLOT_FIGSIZE = (19.0, 3)
+PLOT_WSPACE = 0.22
 PLOT_WIDTH_RATIOS = [1.0, 1.0, 1.0, 0.3]
+PLOT_BOX_ASPECT = 0.85
 
 DEFAULT_SEED_RESULTS = (
     PROJECT_ROOT / "scripts" / "experiments" / "solver" / "results" / "cifar10"
@@ -56,7 +57,7 @@ SOLVER_ORDER = [
 ]
 SOLVER_LABELS = {
     "p_lissa_full": "P-LiSSA",
-    "p_lissa_0p1": "P-LiSSA with 10% param",
+    "p_lissa_0p1": "P-LiSSA w/ 10% param",
     "lissa": "LiSSA",
     "cg": "Conjugate gradient",
     "schulz": "Schulz iteration",
@@ -572,6 +573,7 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 )
 
         ax.set_xscale("log")
+        ax.set_box_aspect(PLOT_BOX_ASPECT)
         xs = np.asarray([size_params[size] for size in sizes], dtype=float)
         ax.set_xticks(xs)
         ax.set_xticklabels([format_param_count(size_params[size]) for size in sizes])

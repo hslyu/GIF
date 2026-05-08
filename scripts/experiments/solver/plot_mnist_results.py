@@ -19,8 +19,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import font_manager as fm  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib import patheffects as pe  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import ConnectionPatch, Rectangle  # noqa: E402
 from matplotlib.ticker import (  # noqa: E402
     FixedFormatter,
@@ -37,12 +37,13 @@ PRETENDARD_REGULAR_PATH = PRETENDARD_FONT_DIR / "Pretendard-Regular.ttf"
 PRETENDARD_MEDIUM_PATH = PRETENDARD_FONT_DIR / "Pretendard-Medium.ttf"
 
 TICK_FONTSIZE = 12
-AXIS_LABEL_FONTSIZE = 12
-LEGEND_FONTSIZE = 10
+AXIS_LABEL_FONTSIZE = 14
+LEGEND_FONTSIZE = 12
 DAMPING_LABEL_FONTSIZE = 10
-PLOT_FIGSIZE = (18.0, 3)
-PLOT_WSPACE = 0.35
+PLOT_FIGSIZE = (19.0, 3)
+PLOT_WSPACE = 0.18
 PLOT_WIDTH_RATIOS = [1.0, 1.0, 1.0, 0.3]
+PLOT_BOX_ASPECT = 0.65
 MEMORY_ZOOM_SIZE_LABEL = "500k"
 MEMORY_ZOOM_X_FACTOR = 1.55
 
@@ -63,8 +64,8 @@ SOLVER_ORDER = [
     "ekfac",
 ]
 SOLVER_LABELS = {
-    "p_lissa_full": "P-LiSSA",
-    "p_lissa_0p1": "P-LiSSA with 10% param",
+    "p_lissa_full": "p-LiSSA",
+    "p_lissa_0p1": "p-LiSSA w/ 10% param",
     "lissa": "LiSSA",
     "cg": "Conjugate gradient",
     "schulz": "Schulz iteration",
@@ -325,7 +326,11 @@ def solver_damping_label(
     )
     if not values:
         return None
-    return "$\\lambda\\!\\!=\\!\\!" + r"\!/".join(format_damping(value) for value in values) + "$"
+    return (
+        "$\\lambda\\!\\!=\\!\\!"
+        + r"\!/".join(format_damping(value) for value in values)
+        + "$"
+    )
 
 
 def damping_annotation_point(
@@ -344,7 +349,9 @@ def damping_annotation_point(
         x_values = x_smooth[mask]
         y_values = y_smooth[mask]
         index = int(np.argmin(np.abs(np.log(x_values) - math.log(target_x))))
-        y_value = float(np.power(10.0, y_values[index])) if log_y else float(y_values[index])
+        y_value = (
+            float(np.power(10.0, y_values[index])) if log_y else float(y_values[index])
+        )
         candidates.append((float(x_values[index]), y_value))
     if not candidates:
         return None
@@ -748,6 +755,7 @@ def plot_results(rows: list[dict[str, Any]], out_path: Path, write_png: bool) ->
                 )
 
         ax.set_xscale("log")
+        ax.set_box_aspect(PLOT_BOX_ASPECT)
         xs = np.asarray([size_params[size] for size in sizes], dtype=float)
         ax.set_xticks(xs)
         ax.set_xticklabels([format_param_count(size_params[size]) for size in sizes])
